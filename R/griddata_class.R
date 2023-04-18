@@ -389,6 +389,7 @@ grid <- R6::R6Class("grid",
                            #' @param parallel_chains integer. Number of parallel chains
                            #' @param priors list. See Details
                            #' @param verbose logical. Provide feedback on progress
+                           #' @param vb logical. Whether to use variational Bayes via Stan's VB functions. See \link[rstan]{vb}
                            #' @param use_cmdstanr logical. Defaults to false. If true then cmdstanr will be used
                            #' instead of rstan.
                            #' @param ... additional options to pass to `$sample()``, see \link[cmdstanr]{sample}
