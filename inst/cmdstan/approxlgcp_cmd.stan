@@ -36,6 +36,9 @@ functions {
     }
     return fi1;
   }
+  real partial_sum2_lpmf(array[] int y,int start, int end, vector mu){
+    return poisson_log_lpmf(y[start:end]|mu[start:end]);
+  }
 }
 data {
   int<lower=1> D; //number of dimensions
@@ -126,7 +129,8 @@ model{
   for(q in 1:Q){
     gamma[q] ~ normal(prior_linpred_mean[q],prior_linpred_sd[q]);
   }
-  y ~ poisson_log(X*gamma+logpopdens+f);
+  int grainsize = 1;
+  target += reduce_sum(partial_sum2_lpmf,y,grainsize,X*gamma+logpopdens+f);
 
 }
 
