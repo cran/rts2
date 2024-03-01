@@ -1,7 +1,33 @@
-#' R6 class holding sf grid data with data and analysis functions
-#'
-#' Grid data consists of the computational grid over the area of interest. Outcomes and
-#' covariates are projected onto the grid, which can then be sent to the LGCP model.
+#' An rts grid object
+#' 
+#' An rts grid object is an R6 class holding the spatial data with data, model fitting, and analysis functions. 
+#' @details
+#' **INTRODUCTION**
+#' 
+#' The various methods of the class include examples and details of their implementation. The \pkg{sf} package is used for 
+#' all spatial data. A typical workflow with this class would 
+#' be:
+#' \enumerate{
+#'  \item Create a new grid object. The class is initialized with either a single polygon describing the area of interest or a collection 
+#'  of polygons if spatially aggregated data are used. 
+#'  \item If the location (and times) of cases are available (i.e. the data are not spatially aggregated), then we map the points to the computational 
+#'  grid. The function \link[rts2]{create_points} can generate point data in the correct \pkg{sf} format. The member function `points_to_grid` will then 
+#'  map these data to the grid. Counts can also be manually added to grid data. For region data, since the counts are assumed to be already aggregated, these 
+#'  must be manually provided by the user. The case counts must appear in columns with specific names. If there is only a single time period then the counts 
+#'  must be in a column named `y`. If there are multiple time periods then the counts must be in columns names `t1`, `t2`, `t3`,... Associated columns labelled 
+#'  `date1`, `date2`, etc. will permit use of some functionality regarding specific time intervals.
+#'  \item If any covariates are to be used for the modelling, then these can be mapped to the compuational grid using the function `add_covariates()`. Other 
+#'  functions, `add_time_indicators()` and `get_dow()` will also generate relevant temporal indicators where required. At a minimum we would recommend including 
+#'  a measure of population density.
+#'  \item Fit a model. There are multiple methods for model fitting, which are available through the member functions `lgcp_ml()` and `lgcp_bayes()` for maximum likelihood 
+#'  and Bayesian approaches, respectively. The results are stored internally and optionally returned as a `rtsFit` object. 
+#'  \item Summarise the output. The main functions for summarising the output are `extract_preds()`, which will generate predictions of relative risk, incidence rate 
+#'  ratios, and predicted incidence, and `hotspots()`, which will estimate probabilities that these statistics exceed given thresholds. For spatially-aggregated data models, 
+#'  the relative risk applies to the grid, whereas rate ratios and predicted incidence applies to the areas.
+#'  \item Predictions can be visualised or aggregated to relevant geographies with the `plot()` and `aggregate()` functions.
+#' }
+#' Specific details of the implementation of each of these functions along with examples appear below. 
+#' 
 #' @importFrom R6 R6Class
 #' @importFrom stats weighted.mean sd model.matrix
 #' @importFrom utils stack capture.output
@@ -24,13 +50,9 @@ grid <- R6::R6Class("grid",
                            #' @field boundary sf object showing the boundary of the area of interest
                            boundary = NULL,
                            #' @description
-                           #' Create a new griddata object
+                           #' Create a new grid object
                            #'
-                           #' Produces a regular grid over an area of interest as an sf object
-                           #'
-                           #' Given a contiguous boundary describing an area of interest, which is stored as an sf
-                           #' object of a regular grid within the limits of the boundary at `$grid_data`. The boundary
-                           #' is also stored in the object as `$boundary`
+                           #' Produces a regular grid over an area of interest as an sf object, see details for information on initialisation.
                            #'
                            #' @param poly An sf object containing either one polygon describing the area of interest or multiple polygons
                            #' representing survey or census regions in which the case data counts are aggregated
@@ -38,17 +60,20 @@ grid <- R6::R6Class("grid",
                            #' @param verbose Logical indicating whether to provide feedback to the console.
                            #' @return NULL
                            #' @examples
+                           #' # a simple example with a square and a small number of cells
+                           #' # this same running example is used for the other functions 
                            #' b1 = sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
                            #' g1 <- grid$new(b1,0.5)
+                           #' 
+                           #' # an example with multiple polygons
+                           #' data("birmingham_crime")
+                           #' g2 <- grid$new(birmingham_crime,cellsize = 1000)
                            initialize = function(poly,
                                                  cellsize,
                                                  verbose = TRUE){
-
                              if(!is(poly,"sf"))stop("data not sf")
                              if(!is(cellsize,"numeric"))stop("cellsize not numeric")
                              if(nrow(poly)>1 & verbose)message("Multiple polygons in data. Assuming analysis uses counts aggregated to an irregular lattice and not point data.")
-                             #if(nrow(boundary)!=1)stop("boundary should only contain one polygon")
-                             
                              if(nrow(poly)==1){
                                bgrid <- sf::st_make_grid(poly,cellsize = cellsize)
                                bgrid <- sf::st_sf(bgrid)
@@ -56,8 +81,6 @@ grid <- R6::R6Class("grid",
                                idx2<- sf::st_intersects(y=bgrid,x=poly)
                                idx <- c(unlist( sapply( idx1, `[`) ),unlist( sapply( idx2, `[`) ))
                                bgrid <- bgrid[idx,]
-                               
-                               #class(bgrid) <- c(class(bgrid),"rts_grid")
                                self$boundary <- poly
                                bgrid <- bgrid[!duplicated(sf::st_coordinates(sf::st_centroid(bgrid))),]
                                self$grid_data <- bgrid
@@ -73,7 +96,6 @@ grid <- R6::R6Class("grid",
                                bgrid <- bgrid[idx,]
                                bgrid <- bgrid[!duplicated(sf::st_coordinates(sf::st_centroid(bgrid))),]
                                self$grid_data <- bgrid
-                               
                                sf::st_agr(poly) = "constant"
                                sf::st_agr(self$grid_data) = "constant"
                                self$grid_data$grid_id <- 1:nrow(self$grid_data)
@@ -84,7 +106,6 @@ grid <- R6::R6Class("grid",
                                tmp$area <- as.numeric(sf::st_area(tmp))
                                a1 <-rep(aggregate(tmp$area,list(tmp$region_id),sum)$x,unname(table(tmp$region_id)))
                                tmp$w <- tmp$area/a1
-                               
                                self$region_data <- poly
                                private$intersection_data <- tmp
                              }
@@ -98,22 +119,75 @@ grid <- R6::R6Class("grid",
                              }
                            },
                            #' @description
-                           #' Prints the $grid_data sf object
+                           #' Prints this object
+                           #' @return None. called for effects.
                            print = function(){
-                             print(self$grid_data)
+                             is_setup <- FALSE
+                             cat("\nAn rts2 grid object\n")
+                             if(is.null(self$region_data)){
+                               cat("\n \U2BC8 Boundary\n\n")
+                               print(head(self$boundary))
+                             }
+                             cat("\n \U2BC8 Computational grid\n     \U2BA1 ",nrow(self$grid_data)," cells")
+                             if(is.null(self$region_data)){
+                               nT <- sum(grepl("\\bt[0-9]",colnames(self$grid_data)))
+                               if(nT == 0) {
+                                 nT <- 1
+                                 if("y"%in%colnames(self$grid_data)){
+                                   cat("\n     \U2BA1 Spatial-only case data")
+                                   is_setup <- TRUE
+                                 } else {
+                                   cat("\n     \U2BA1 No case data currently mapped to grid: use points_to_grid() function or manually add a column y or t1, t2, t3, ... containing counts.") 
+                                 }
+                               } else {
+                                 cat("\n     \U2BA1 Case data for ",nT," time periods")
+                                 is_setup <- TRUE
+                               }
+                               cat("\n\n")
+                               print(head(self$grid_data))
+                             } else {
+                               cat("\n \U2BC8 Spatially aggregated count data:\n     \U2BA1 ",nrow(self$region_data)," regions")
+                               nT <- sum(grepl("\\bt[0-9]",colnames(self$region_data)))
+                               if(nT == 0){
+                                 nT <- 1
+                                 if("y"%in%colnames(self$region_data)){
+                                   cat("\n     \U2BA1 Spatial-only case data")
+                                   is_setup <- TRUE
+                                 } else {
+                                   cat("\n     \U2BA1 No case data currently in region data: manually add a column y or t1, t2, t3, ... containing counts.") 
+                                 }
+                               } else {
+                                 cat("\n     \U2BA1 Case data for ",nT," time periods")
+                                 is_setup <- TRUE
+                               }
+                               cat("\n     \U2BA1 ",nrow(private$intersection_data)," region-grid intersection areas\n")
+                               print(head(self$region_data))
+                             }
+                             cat("\n \U2BC8 Last model fit \n")
+                             if(!is.null(private$last_model_fit)){
+                               print(private$last_model_fit)
+                             } else {
+                               cat("     \U2BA1 No model has been fit to these data: see lgcp_ml() and lgcp_bayes()")
+                             }
                            },
                            #' @description
                            #' Plots the grid data
                            #'
                            #' @details
+                           #' **PLOTTING**
+                           #' 
                            #' If `zcol` is not specified then only the geometry is plotted, otherwise the covariates specified will be plotted.
-                           #' The user can also use sf plotting functions on grid$grid_data directly.
+                           #' The user can also use sf plotting functions on self$grid_data and self$region_data directly.
                            #' @param zcol Vector of strings specifying names of columns of `grid_data` to plot
                            #' @return A plot
                            #' @examples
                            #' b1 = sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
                            #' g1 <- grid$new(b1,0.5)
                            #' g1$plot()
+                           #' 
+                           #' # a plot with covariates - we simulate covariates first
+                           #' g1$grid_data$cov <- stats::rnorm(nrow(g1$grid_data))
+                           #' g1$plot("cov")
                            plot = function(zcol){
                              if(missing(zcol)){
                                plot(sf::st_geometry(self$grid_data))
@@ -125,11 +199,13 @@ grid <- R6::R6Class("grid",
                            #' Generates case counts of points over the grid
                            #'
                            #' Counts the number of cases in each time period in each grid cell
-                           #'
+                           #' @details
+                           #' **POINTS TO GRID**
+                           #' 
                            #' Given the sf object with the point locations and date output from
                            #' `create_points()`, the functions will add columns to `grid_data` indicating
                            #' the case count in each cell in each time period.
-                           #' @details
+                           #' 
                            #' Case counts are generated for each grid cell for each time period. The user
                            #' can specify the length of each time period; currently `day`, `week`, and `month`
                            #' are supported.
@@ -138,7 +214,7 @@ grid <- R6::R6Class("grid",
                            #' `laglength` argument. The total number of time periods is the specified lag
                            #' length counting back from the most recent case. The columns in the output
                            #' will be named `t1`, `t2`,... up to the lag length, where the highest number
-                           #' is the most recent period.
+                           #' is the most recent period. 
                            #' @param point_data sf object describing the point location of cases with a column
                            #' `t` of the date of the case in YYYY-MM-DD format. See \link[rts2]{create_points}
                            #' @param t_win character string. One of "day", "week", or "month" indicating the
@@ -151,7 +227,8 @@ grid <- R6::R6Class("grid",
                            #' @examples
                            #' b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
                            #' g1 <- grid$new(b1,0.5)
-                           #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
+                           #' # simulate some points
+                           #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20)) 
                            #' dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
                            #' g1$points_to_grid(dp, laglength=5)
                            points_to_grid = function(point_data,
@@ -160,17 +237,12 @@ grid <- R6::R6Class("grid",
                                                      verbose = TRUE){
 
                              if(!is(point_data,"sf"))stop("points not sf")
-
-
                              if(sf::st_crs(point_data)!=sf::st_crs(self$grid_data)){
                                warning("CRS not equal. Setting st_crs(point_data)==st_crs(self$grid_data)")
                                sf::st_crs(point_data) <- sf::st_crs(self$grid_data)
                              }
-
                              if("t"%in%colnames(point_data)){
-
                                if(!t_win%in%c("day","week","month"))stop("t_win not day, week, or month")
-
                                #get unique time values to summarise over
                                tvals <- c(as.Date(min(point_data$t)),as.Date(max(point_data$t)))
                                yvals <- lubridate::year(tvals[1]):lubridate::year(tvals[2])
@@ -189,9 +261,7 @@ grid <- R6::R6Class("grid",
                                  tdat <- paste0(lubridate::month(point_data$t),".",lubridate::year(point_data$t))
                                  tuniq <- paste0(lubridate::month(tuniq),".",lubridate::year(tuniq))
                                }
-
                                tuniq <- tuniq[(length(tuniq)-laglength+1):length(tuniq)]
-
                                for(i in 1:length(tuniq))
                                {
                                  self$grid_data$y <-  lengths(sf::st_intersects(self$grid_data,
@@ -200,22 +270,22 @@ grid <- R6::R6Class("grid",
                                  self$grid_data$d <- min(point_data[tdat==tuniq[i],]$t)
                                  colnames(self$grid_data)[length(colnames(self$grid_data))] <- paste0("date",i)
                                }
-                               
                              } else {
                                self$grid_data$y <-  lengths(sf::st_intersects(self$grid_data,
                                                                          point_data))
                              }
-
                              if(verbose)message("added points data to grid data")
                            },
                            #' @description
                            #' Adds covariate data to the grid
                            #'
-                           #' Maps spatial, temporal, or spatio-temporal covariate data onto the grid
+                           #' Maps spatial, temporal, or spatio-temporal covariate data onto the grid.
                            #'
                            #' @details
-                           #' *ADDING COVARIATES*
+                           #' **ADDING COVARIATES**
+                           #' 
                            #' *Spatially-varying data only* 
+                           #' 
                            #' `cov_data` is an sf object describing covariate
                            #' values for a set of polygons over the area of interest. The values are mapped
                            #' onto `grid_data`. For each grid cell in `grid_data` a weighted
@@ -226,6 +296,7 @@ grid <- R6::R6Class("grid",
                            #' with the names in `zcols` are added to the output.
                            #'
                            #' *Temporally-varying only data* 
+                           #' 
                            #' `cov_data` is a data frame with number of rows
                            #' equal to the number of time periods. One of the columns must be called `t` and
                            #' have values from 1 to the number of time periods. The other columns of the data
@@ -236,6 +307,7 @@ grid <- R6::R6Class("grid",
                            #' `dayMon1`, `dayMon2`, etc.
                            #'
                            #' *Spatially and temporally varying data* 
+                           #' 
                            #' There are two ways to add data that
                            #' vary both spatially and temporally. The final output for use in analysis must
                            #' have a column for each covariate and each time period with the same name appended
@@ -265,6 +337,20 @@ grid <- R6::R6Class("grid",
                            #' g1$add_covariates(cov1$grid_data,
                            #'                   zcols="cov",
                            #'                   verbose = FALSE)
+                           #' 
+                           #' \donttest{
+                           #' # mapping population data from some other polygons
+                           #' data("boundary")
+                           #' data("birmingham_crime")
+                           #' g2 <- grid$new(boundary,cellsize=0.008)
+                           #' msoa <- sf::st_transform(birmingham_crime,crs = 4326)
+                           #' suppressWarnings(sf::st_crs(msoa) <- sf::st_crs(g2$grid_data)) # ensure crs matches
+                           #' g2$add_covariates(msoa,
+                           #'                   zcols="pop",
+                           #'                   weight_type="area",
+                           #'                   verbose=FALSE)
+                           #' g2$plot("pop")
+                           #' }
                            add_covariates = function(cov_data,
                                                      zcols,
                                                      weight_type="area",
@@ -279,7 +365,6 @@ grid <- R6::R6Class("grid",
                              }
                              if(any(!zcols%in%colnames(cov_data)))stop("variable names not in cov_data")
                              if(!is(cov_data,"sf"))if(!"t"%in%colnames(cov_data))stop("not column named t in cov_data")
-
                              if(is(cov_data,"sf")){
                                sf::st_agr(cov_data) = "constant"
                                sf::st_agr(self$grid_data) = "constant"
@@ -301,19 +386,14 @@ grid <- R6::R6Class("grid",
                                  a1 <-rep(aggregate(tmp$w,list(tmp$grid_id),sum)$x,unname(table(tmp$grid_id)))
                                  tmp$w <- tmp$w/a1
                                }
-                               
                                vals <- matrix(nrow=nrow(self$grid_data),ncol=length(zcols))
-
                                if(verbose)cat("Overlaying geographies\n")
-
                                for(i in 1:nrow(self$grid_data)){
                                  for(j in 1:length(zcols)){
                                    vals[i,j] <- sum(cov_data[tmp[tmp$grid_id==i,]$region_id,zcols[j],drop=TRUE]*tmp[tmp$grid_id==i,]$w)
                                  }
-
                                  if(verbose)cat("\r",progress_bar(i,nrow(self$grid_data)))
                                }
-
                                for(j in 1:length(zcols)){
                                  self$grid_data$x <- vals[,j]
                                  if(is.null(t_label)){
@@ -321,7 +401,6 @@ grid <- R6::R6Class("grid",
                                  } else {
                                    colnames(self$grid_data)[length(colnames(self$grid_data))] <- paste0(zcols[j],t_label)
                                  }
-
                                }
                              } else {
                                nT <- max(cov_data$t)
@@ -332,15 +411,13 @@ grid <- R6::R6Class("grid",
                                  }
                                }
                              }
-
-                             if(verbose)message(paste0("added covariates ",zcols))
-
+                             if(verbose)message(paste0("\n added covariates ",zcols))
                            },
                            #' @description
                            #' Generate day of week data
                            #'
                            #' Create data frame with day of week indicators
-                           #'
+                           #' 
                            #' Generates a data frame with indicator
                            #' variables for each day of the week for use in the `add_covariates()` function.
                            #'@return data.frame with columns `t`, `day`, and `dayMon` to `daySun`
@@ -350,17 +427,23 @@ grid <- R6::R6Class("grid",
                            #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
                            #' dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
                            #' g1$points_to_grid(dp, laglength=5)
-                           #' g1$get_dow()
+                           #' dow <- g1$get_dow()
+                           #' g1$add_covariates(dow,zcols = colnames(dow)[3:ncol(dow)])
                            get_dow = function(){
-                             nT <- length(colnames(self$grid_data)[grepl("t[0-9]",colnames(self$grid_data))])
+                             if(is.null(self$region_data)){
+                               nT <- sum(grepl("\\bt[0-9]",colnames(self$grid_data)))
+                             } else {
+                               nT <- sum(grepl("\\bt[0-9]",colnames(self$region_data)))
+                             }
+                             if(nT <= 1)stop("No time periods to generate day of week indicators for")
                              dw <- data.frame(t=1:nT,day=NA)
-                             for(i in 1:nT){
-                               dw$day[i] <- as.character(lubridate::wday(as.data.frame(self$grid_data)[1,paste0("date",i)],
-                                                                         label = TRUE))
+                             if(is.null(self$region_data)){
+                               for(i in 1:nT) dw$day[i] <- as.character(lubridate::wday(as.data.frame(self$grid_data)[1,paste0("date",i)],label = TRUE))
+                             } else {
+                               for(i in 1:nT) dw$day[i] <- as.character(lubridate::wday(as.data.frame(self$region_data)[1,paste0("date",i)],label = TRUE))
                              }
                              dx <- model.matrix(~day-1,data=dw)
                              dw <- cbind(dw,as.data.frame(dx))
-
                              return(dw)
                            },
                            #' @description 
@@ -409,7 +492,8 @@ grid <- R6::R6Class("grid",
                            #' Fit an (approximate) log-Gaussian Cox Process model using Bayesian methods
                            #'
                            #' @details
-                           #' *BAYESIAN MODEL FITTING*
+                           #' **BAYESIAN MODEL FITTING**
+                           #' 
                            #' The grid data must contain columns `t*`, giving the case
                            #' count in each time period (see `points_to_grid`), as well as any covariates to include in the model
                            #' (see `add_covariates`) and the population density. Otherwise, if the data are regional data, then the outcome
@@ -432,8 +516,9 @@ grid <- R6::R6Class("grid",
                            #' The argument `approx` specifies whether to use a full LGCP model (`approx='none'`) or whether
                            #' to use either a nearest neighbour approximation (`approx='nngp'`) or a "Hilbert space" approximation
                            #' (`approx='hsgp'`). For full details of NNGPs see XX and for Hilbert space approximations see references (1) and (2).
-                           #'                           #'
+                           #' 
                            #' *Priors*
+                           #' 
                            #' For Bayesian model fitting, the priors should be provided as a list to the griddata object:
                            #'```
                            #'griddata$priors <- list(
@@ -477,7 +562,6 @@ grid <- R6::R6Class("grid",
                            #' covariance function
                            #' @param known_theta An optional vector of two values of the covariance parameters. If these are provided
                            #' then the covariance parameters are assumed to be known and will not be estimated.
-                           #' @param dir character string. Directory to save ouptut.
                            #' @param iter_warmup integer. Number of warmup iterations
                            #' @param iter_sampling integer. Number of sampling iterations
                            #' @param chains integer. Number of chains
@@ -487,18 +571,21 @@ grid <- R6::R6Class("grid",
                            #' @param vb Logical indicating whether to use variational Bayes (TRUE) or full MCMC sampling (FALSE)
                            #' @param use_cmdstanr logical. Defaults to false. If true then cmdstanr will be used
                            #' instead of rstan.
+                           #' @param return_stan_fit logical. The results of the model fit are stored internally as an `rstFit` object and 
+                           #' returned in that format. If this argument is set to TRUE, then the fitted stan object will instead be returned, 
+                           #' but the `rtsFit` object will still be saved. 
                            #' @param ... additional options to pass to `$sample()``.
                            #' @return A \link[rstan]{stanfit} or a `CmdStanMCMC` object
                            #' @seealso points_to_grid, add_covariates
                            #' @examples
-                           #' \dontrun{
+                           #' # the data are just random simulated points 
                            #' b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
                            #' g1 <- grid$new(b1,0.5)
                            #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
                            #' dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
                            #' cov1 <- grid$new(b1,0.8)
                            #' cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-                           #' g1$add_covariates(cov1,
+                           #' g1$add_covariates(cov1$grid_data,
                            #'                   zcols="cov",
                            #'                   verbose = FALSE)
                            #' g1$points_to_grid(dp, laglength=5)
@@ -508,7 +595,30 @@ grid <- R6::R6Class("grid",
                            #'   prior_linpred_mean=c(0),
                            #'   prior_linpred_sd=c(5)
                            #'   )
-                           #' res <- g1$lgcp_bayes(popdens="cov")
+                           #' \donttest{
+                           #' g1$lgcp_bayes(popdens="cov", approx = "hsgp", parallel_chains = 0)
+                           #' g1$model_fit()
+                           #' # we can extract predictions
+                           #' g1$extract_preds("rr")
+                           #' g1$plot("rr")
+                           #' g1$hotspots(rr.threshold = 2)
+                           #' 
+                           #'  # this example uses real aggregated data but will take a relatively long time to run
+                           #'  data("birmingham_crime")
+                           #'  example_data <- birmingham_crime[,c(1:8,21)]
+                           #'  example_data$y <- birmingham_crime$t12
+                           #'  g2 <- grid$new(example_data,cellsize=1000)
+                           #'  g2$priors <- list(
+                           #'   prior_lscale=c(0,0.5),
+                           #'   prior_var=c(0,0.5),
+                           #'   prior_linpred_mean=c(-3),
+                           #'   prior_linpred_sd=c(5)
+                           #' )
+                           #' g2$lgcp_bayes(popdens="pop", approx = "hsgp", parallel_chains = 0)
+                           #' g2$model_fit()
+                           #' g2$extract_preds("rr")
+                           #' g2$plot("rr")
+                           #' g2$hotspots(rr.threshold = 2)
                            #' }
                            lgcp_bayes = function(popdens,
                                                covs=NULL,
@@ -518,20 +628,17 @@ grid <- R6::R6Class("grid",
                                                L=1.5,
                                                model = "exp",
                                                known_theta = NULL,
-                                               dir=NULL,
                                                iter_warmup=500,
                                                iter_sampling=500,
                                                chains=3,
                                                parallel_chains=3,
                                                verbose=TRUE,
                                                vb = FALSE,
-                                               use_cmdstanr = TRUE,
+                                               use_cmdstanr = FALSE,
+                                               return_stan_fit = FALSE,
                                                ...){
-
-                             if(verbose)if(is.null(dir))message("dir not set, files will be lost after session restart")
                              if(!approx%in%c('nngp','hsgp','none'))stop("approx must be one of nngp, hsgp, or none")
                              if(m<=1 & approx %in% c('nngp','hsgp'))stop("m must be greater than one")
-                             if(m >25 & verbose)message("m is large, sampling may take a long time.")
                              if(!is.null(self$region_data)&verbose)message("Using regional data model.")
                              #prepare data for model fit
                              datlist <- private$prepare_data(m,model,approx,popdens,covs,covs_grid,verbose,TRUE,L)
@@ -548,27 +655,27 @@ grid <- R6::R6Class("grid",
 
                              if(approx == "hsgp"){
                                if(!is.null(self$region_data)){
-                                 filen <- "approxlgcp_region_cmd.stan"
-                                 fname <- "approxlgcp_region"
+                                 filen <- "rtsapproxlgcp_region_cmd.stan"
+                                 fname <- "rtsapproxlgcp_region"
                                } else {
-                                 filen <- "approxlgcp_cmd.stan"
-                                 fname <- "approxlgcp"
+                                 filen <- "rtsapproxlgcp_cmd.stan"
+                                 fname <- "rtsapproxlgcp"
                                }
                              } else if(approx == "nngp"){
                                if(!is.null(self$region_data)){
-                                 filen <- "approxlgcp_nngp_region_cmd.stan"
-                                 fname <- "approxlgcp_nngp_region"
+                                 filen <- "rtsapproxlgcp_nngp_region_cmd.stan"
+                                 fname <- "rtsapproxlgcp_nngp_region"
                                } else {
-                                 filen <- "approxlgcp_nngp_cmd.stan"
-                                 fname <- "approxlgcp_nngp"
+                                 filen <- "rtsapproxlgcp_nngp_cmd.stan"
+                                 fname <- "rtsapproxlgcp_nngp"
                                }
                              } else {
                                if(!is.null(self$region_data)){
-                                 filen <- "lgcp_region_cmd.stan"
-                                 fname <- "lgcp_region"
+                                 filen <- "rtslgcp_region_cmd.stan"
+                                 fname <- "rtslgcp_region"
                                } else {
-                                 filen <- "lgcp_cmd.stan"
-                                 fname <- "lgcp"
+                                 filen <- "rtslgcp_cmd.stan"
+                                 fname <- "rtslgcp"
                                }
                              }
 
@@ -599,7 +706,15 @@ grid <- R6::R6Class("grid",
                                    ...
                                  )
                                }
-                               
+                               ypred <- res$draws("y_grid_predict",format = "draws_matrix")
+                               f <- res$draws("f",format = "draws_matrix")
+                               gamma <- res$draws("gamma",format = "draws_matrix")
+                               if(is.null(known_theta)){
+                                 phi <- res$draws("phi_param",format = "draws_matrix")
+                                 sigma <- res$draws("sigma_param",format = "draws_matrix")
+                               } 
+                               if(!is.null(self$region_data)) gamma_g <- res$draws("gamma_g",format = "draws_matrix")
+                               if(datlist$nT > 1) ar <- res$draws("ar",format = "draws_matrix")
                              } else {
                                if(!verbose){
                                  if(!vb){
@@ -627,19 +742,79 @@ grid <- R6::R6Class("grid",
                                    res <- rstan::vb(stanmodels[[fname]],
                                                     data=datlist)
                                  }
-                                 
+                                 ypred <- rstan::extract(res,"y_grid_predict")$y_grid_predict
+                                 f <- rstan::extract(res,"f")$f
+                                 gamma <- rstan::extract(res,"gamma")$gamma
+                                 if(is.null(known_theta)){
+                                   phi <- rstan::extract(res,"phi_param")$phi_param
+                                   sigma <- rstan::extract(res,"sigma_param")$sigma_param
+                                 } 
+                                 if(!is.null(self$region_data)) gamma_g <- rstan::extract(res,"gamma_g")$gamma_g
+                                 if(datlist$nT > 1) ar <- rstan::extract(res,"ar")$ar
                                }
-
                              }
-
-
-                             return(res)
+                             
+                             pars <- c("(Intercept)",covs)
+                             if(!is.null(self$region_data) & length(covs_grid)>0) pars <- c(pars, covs_grid)
+                             pars <- c(pars,"sigma","phi")
+                             if(datlist$nT > 1)pars <- c(pars, "rho")
+                             ests <- colMeans(gamma)
+                             if(!is.null(self$region_data)& length(covs_grid)>0) ests <- c(ests, colMeans(gamma_g))
+                             ests <- c(ests, colMeans(sigma),colMeans(phi))
+                             if(datlist$nT > 1) ests <- c(ests, colMeans(ar))
+                             sds <- apply(gamma,2,sd)
+                             if(!is.null(self$region_data)& length(covs_grid)>0) sds <- apply(gamma_g,2,sd)
+                             sds <- c(sds,apply(sigma,2,sd), apply(phi,2,sd))
+                             if(datlist$nT > 1) sds <- c(sds, apply(ar,2,sd))
+                             lower <- apply(gamma,2,function(x)quantile(x,0.025))
+                             if(!is.null(self$region_data)& length(covs_grid)>0) lower <- c(lower, apply(gamma_g,2,function(x)quantile(x,0.025)))
+                             lower <- c(lower,apply(sigma,2,function(x)quantile(x,0.025)), apply(phi,2,function(x)quantile(x,0.025)))
+                             if(datlist$nT > 1) lower <- c(lower, apply(ar,2,function(x)quantile(x,0.025)))
+                             upper <- apply(gamma,2,function(x)quantile(x,0.975))
+                             if(!is.null(self$region_data)& length(covs_grid)>0) upper <- c(upper, apply(gamma_g,2,function(x)quantile(x,0.975)))
+                             upper <- c(upper,apply(sigma,2,function(x)quantile(x,0.975)), apply(phi,2,function(x)quantile(x,0.975)))
+                             if(datlist$nT > 1) upper <- c(upper, apply(ar,2,function(x)quantile(x,0.975)))
+                               
+                             results <- data.frame(par = pars,
+                                               est = ests,
+                                               SE= sds,
+                                               t = NA,
+                                               p = NA,
+                                               lower = lower,
+                                               upper = upper)
+                             
+                             out <- list(coefficients = results,
+                                         converged = NA,
+                                         approx = approx,
+                                         method = ifelse(vb,"vb","mcmc"),
+                                         m = iter_sampling*chains,
+                                         tol = NA,
+                                         aic = NA,
+                                         se=NA,
+                                         Rsq = NA,
+                                         logl = NA,
+                                         re.samps = t(f),
+                                         iter = iter_sampling,
+                                         time = NA,
+                                         P = 1 + length(covs) + length(covs_grid),
+                                         y=datlist$y,
+                                         y_predicted  = t(ypred),
+                                         nT = datlist$nT,
+                                         conv_criterion = NA)
+                             class(out) <- "rtsFit"
+                             private$last_model_fit <- out
+                             if(return_stan_fit){
+                               return(res)
+                             } else {
+                               return(invisible(out))
+                             }
                            },
                            #' @description
                            #' Fit an (approximate) log-Gaussian Cox Process model using Maximum Likelihood
                            #'
                            #' @details
-                           #' *MAXIMUM LIKELIHOOD MODEL FITTING*
+                           #' **MAXIMUM LIKELIHOOD MODEL FITTING**
+                           #' 
                            #' The grid data must contain columns `t*`, giving the case
                            #' count in each time period (see `points_to_grid`), as well as any covariates to include in the model
                            #' (see `add_covariates`) and the population density. Otherwise, if the data are regional data, then the outcome
@@ -648,12 +823,15 @@ grid <- R6::R6Class("grid",
                            #' The argument `approx` specifies whether to use a full LGCP model (`approx='none'`) or whether
                            #' to use either a nearest neighbour approximation (`approx='nngp'`) 
                            #' 
-                           #' Model fitting uses MCMC Maximum likelihood, which has three steps:
+                           #' Model fitting uses one of several stochastic maximum likelihood algorithms, which have three steps:
                            #'  1. Sample random effects using MCMC. Using cmdstanr is recommended as it is much faster. The arguments 
                            #'    `mcmc_warmup` and `mcmc_sampling` specify the warmup and sampling iterations for this step.
                            #'  2. Fit fixed effect parameters using expectation maximisation.
                            #'  3. Fit covariance parameters using expectation maximisation. This third step is the slowest. The NNGP approximation
                            #'     provides some speed improvements. Otherwise this step can be skipped if the covaraince parameters are "known".   
+                           #'  The argument `algo` specifies the algorithm, the user can select either MCMC maximum likelihood or stochastic approximation 
+                           #'  expectation maximisation with or without Ruppert-Polyak averaging. MCMC-ML can be used with or without adaptive MCMC sample sizes
+                           #'  and either a derivative free or quasi-Newton optimiser (depending on the underlying model).
                            #' 
                            #' @param popdens character string. Name of the population density column
                            #' @param covs vector of strings. Base names of the covariates to
@@ -686,29 +864,52 @@ grid <- R6::R6Class("grid",
                            #' @param tol Scalar indicating the upper bound for the maximum absolute difference between parameter estimates on sucessive iterations, after which the algorithm 
                            #' terminates.
                            #' @param max.iter Integer. The maximum number of iterations for the algorithm.
-                           #' @param algo integer. 1 = L-BFGS for beta and non-approximate covariance parameters (default), 2 = BOBYQA for both, 3 = L-BFGS for beta, BOBYQA for covariance parameters.
+                           #' @param algo integer. 1 = MCMC ML with L-BFGS for beta and non-approximate covariance parameters, 
+                           #'   2 = MCMC ML with BOBYQA for both, 3 = MCMC ML with L-BFGS for beta, BOBYQA for covariance parameters,
+                           #'   4 = SAEM with BOBYQA for both, 5 = SAEM with RP averaging and BOBYQA for both (default), 6-8 = as 1-3 but 
+                           #'   with adaptive MCMC sample size that starts at 20 with a max of `iter_sampling`
+                           #' @param alpha Optional. Value for alpha in the SAEM parameter.
+                           #' @param conv_criterion Integer. The convergence criterion for the algorithm. 1 = No improvement in the overall log-likelihood with probability 0.95,
+                           #' 2 = No improvement in the log-likelihood for beta with probability 0.95, 3 = Difference between model parameters is less than `tol` between iterations.
                            #' @param iter_warmup integer. Number of warmup iterations
                            #' @param iter_sampling integer. Number of sampling iterations
                            #' @param trace Integer. Level of detail of information printed to the console. 0 = none, 1 = some (default), 2 = most.
                            #' @param use_cmdstanr logical. Defaults to false. If true then cmdstanr will be used
                            #' instead of rstan.
                            #' @param ... additional options to pass to `$sample()`
-                           #' @return A `mcmlrts` model fit object
+                           #' @return Optionally, an `rtsFit` model fit object. This fit is stored internally and can be retrieved with `model_fit()`
                            #' @seealso points_to_grid, add_covariates
                            #' @examples
-                           #' \dontrun{
+                           #' # a simple example with completely random points
                            #' b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
                            #' g1 <- grid$new(b1,0.5)
                            #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
                            #' dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
                            #' cov1 <- grid$new(b1,0.8)
                            #' cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-                           #' g1$add_covariates(cov1,
+                           #' g1$add_covariates(cov1$grid_data,
                            #'                   zcols="cov",
                            #'                   verbose = FALSE)
                            #' g1$points_to_grid(dp, laglength=5)
-                           #' res <- g1$lgcp_ml(popdens="cov")
+                           #' \donttest{
+                           #' g1$lgcp_ml(popdens="cov",iter_warmup = 100, iter_sampling = 50)
+                           #' g1$model_fit()
+                           #' g1$extract_preds("rr")
+                           #' g1$plot("rr")
+                           #' g1$hotspots(rr.threshold = 2)
+                           #' 
+                           #' # this example uses real aggregated data but will take a relatively long time to run
+                           #'  data("birmingham_crime")
+                           #'  example_data <- birmingham_crime[,c(1:8,21)]
+                           #'  example_data$y <- birmingham_crime$t12
+                           #'  g2 <- grid$new(example_data,cellsize=1000)
+                           #'  g2$lgcp_ml(popdens = "pop",iter_warmup = 100, iter_sampling = 50)
+                           #'  g2$model_fit()
+                           #'  g2$extract_preds("rr")
+                           #'  g2$plot("rr")
+                           #'  g2$hotspots(rr.threshold = 2) 
                            #' }
+                           #' 
                            lgcp_ml = function(popdens,
                                               covs=NULL,
                                               covs_grid = NULL,
@@ -722,19 +923,25 @@ grid <- R6::R6Class("grid",
                                               upper_bound = NULL,
                                               formula_1 = NULL,
                                               formula_2 = NULL,
-                                              algo = 1,
+                                              algo = 4,
+                                              alpha = 0.7,
+                                              conv_criterion = 1,
                                               tol = 1e-2,
                                               max.iter = 30,
                                               iter_warmup=100,
                                               iter_sampling=250,
                                               trace = 1,
-                                              use_cmdstanr = TRUE){
+                                              use_cmdstanr = FALSE){
                              # some checks at the beginning
                              if(!approx%in%c('nngp','none','hsgp'))stop("approx must be one of nngp, hsgp or none")
                              if(m<=1 & approx == 'nngp')stop("m must be greater than one")
                              if(m >25 & trace >= 1)message("m is large, sampling may take a long time.")
                              if(!is.null(self$region_data)& trace >= 1)message("Using regional data model.")
-                             
+                             if(! algo %in% 1:8)stop("Algo must be in 1 - 5")
+                             if(! conv_criterion %in% c(1,2,3))stop("conv_criterion must be 1, 2, or 3")
+                             if(algo %in% c(4,5) & (alpha < 0.5 | alpha >= 1))stop("alpha must be in [0,1) for SAEM")
+                             append_u <- FALSE
+                             adaptive <- algo %in% 6:8
                              # set up main data and initialise the pointer to the C++ class
                              datlist <- private$update_ptr(m,model,approx,popdens,covs,covs_grid,L,TRUE, formula_1, formula_2)
                              if(!is.null(known_theta)){
@@ -750,7 +957,8 @@ grid <- R6::R6Class("grid",
                                datlist$phi_data <- c()
                              }
                              rtsModel__set_trace(private$ptr,trace,private$cov_type,private$lp_type)
-                             
+                             n_mcmc_sampling <- ifelse(adaptive, 20, iter_sampling)
+                             rtsModel__saem(private$ptr, algo %in% 4:5, n_mcmc_sampling, alpha, algo==5, private$cov_type, private$lp_type)
                              ## deal with starting values and initialise parameters
                              if(!is.null(starting_values)){
                                if("gamma"%in%names(starting_values)){
@@ -778,31 +986,17 @@ grid <- R6::R6Class("grid",
                                  }
                                }
                              }
-                             
-                             # ## update the BOBYQA control parameters if necessary
-                             # if(!is.null(self$bobyqa_control)){
-                             #   npt <- ifelse("npt"%in%names(self$bobyqa_control),self$bobyqa_control$npt,0)
-                             #   rhobeg <- ifelse("rhobeg"%in%names(self$bobyqa_control),self$bobyqa_control$rhobeg,0)
-                             #   rhoend <- ifelse("rhoend"%in%names(self$bobyqa_control),self$bobyqa_control$rhoend,0)
-                             #   #if(verbose)cat("\nBOBYQA control parameters: npt(",npt,"), rhobeg(",rhobeg,"), rhoend(",rhoend,")")
-                             #   rtsModel__set_bobyqa_control(private$ptr,private$cov_type,private$lp_type,npt,rhobeg,rhoend)
-                             #   rhobeg <- ifelse("covrhobeg"%in%names(self$bobyqa_control),self$bobyqa_control$covrhobeg,0)
-                             #   rhoend <- ifelse("covrhoend"%in%names(self$bobyqa_control),self$bobyqa_control$covrhoend,0)
-                             #   rtsModel__set_cov_bobyqa_control(private$ptr,private$cov_type,private$lp_type,rhobeg,rhoend)
-                             # }
-                             
-                             if(!is.null(lower_bound)){
-                               rtsModel__set_bound(private$ptr,private$cov_type,private$lp_type,lower_bound,lower=TRUE)
-                             }
-                             if(!is.null(upper_bound)){
-                               rtsModel__set_bound(private$ptr,private$cov_type,private$lp_type,upper_bound,lower=FALSE)
-                             }
-                             
+                             if(!is.null(lower_bound)) rtsModel__set_bound(private$ptr,private$cov_type,private$lp_type,lower_bound,lower=TRUE)
+                             if(!is.null(upper_bound)) rtsModel__set_bound(private$ptr,private$cov_type,private$lp_type,upper_bound,lower=FALSE)
+                             # run one iteration of fitting beta without re (i.e. glm) to get reasonable starting values
+                             # otherwise the algorithm can struggle to converge
+                             rtsModel__update_u(private$ptr,matrix(0,nrow = ifelse(approx=="hsgp", m * m, datlist$Nsample),ncol=1),FALSE,private$cov_type,private$lp_type)
+                             if(trace >= 1)cat("\nIter: 0\n")
+                             rtsModel__ml_beta(private$ptr,0,private$cov_type,private$lp_type)
                              # initialise the parameters and data on the R side
                              beta <- rtsModel__get_beta(private$ptr,private$cov_type,private$lp_type)
                              theta <- rtsModel__get_theta(private$ptr,private$cov_type,private$lp_type)
                              rho <- rtsModel__get_rho(private$ptr,private$cov_type,private$lp_type)
-                             
                              xb <- rtsModel__xb(private$ptr,private$cov_type,private$lp_type)
                              all_pars <- c(beta = beta,theta = theta)
                              if(datlist$nT > 1) all_pars <- c(all_pars, rho = rho)
@@ -816,7 +1010,7 @@ grid <- R6::R6Class("grid",
                              ar_chol <- rtsModel__ar_chol(private$ptr,private$cov_type,private$lp_type)
                              data <- list(
                                N = datlist$Nsample,
-                               Q = ifelse(approx=="hsgp", m * m, datlist$Nsample),
+                               Q = ifelse(approx=="hsgp", datlist$M * datlist$M, datlist$Nsample),
                                nT = datlist$nT,
                                Xb = xb,
                                ZL = as.matrix(L),
@@ -824,11 +1018,10 @@ grid <- R6::R6Class("grid",
                                rho = rho,
                                ar_chol = ar_chol
                              )
-                             
                              ## set up the stan model
                              if(!is.null(self$region_data)){
-                               filecmd <- "mcml_poisson_region_cmd.stan"
-                               filers <- "mcml_poisson_region"
+                               filecmd <- "rtsmcml_poisson_region_cmd.stan"
+                               filers <- "rtsmcml_poisson_region"
                                if(private$lp_type == 3){
                                  xb_grid <- rtsModel__region_grid_xb(private$ptr,private$cov_type)
                                } else {
@@ -842,8 +1035,8 @@ grid <- R6::R6Class("grid",
                                                         Ai = P$Ai+1,
                                                         Ax = P$Ax))
                              } else {
-                               filecmd <- "mcml_poisson_cmd.stan"
-                               filers <- "mcml_poisson"
+                               filecmd <- "rtsmcml_poisson_cmd.stan"
+                               filers <- "rtsmcml_poisson"
                              }
                              if(use_cmdstanr){
                                if(!requireNamespace("cmdstanr")){
@@ -858,19 +1051,18 @@ grid <- R6::R6Class("grid",
                                  mod <- suppressMessages(cmdstanr::cmdstan_model(model_file))
                                }
                              }
-                             
                              # this is the main algorithm. iterate until convergence
                              iter <- 0
-                             while(any(abs(all_pars-all_pars_new)>tol)&iter < max.iter){
-                               
+                             converged <- FALSE
+                             while(!converged &iter < max.iter){
                                # step 1. MCMC sampling of random effects
                                all_pars <- all_pars_new
                                theta <- theta_new
                                if(data$nT > 1) rho <- rho_new
                                iter <- iter + 1
+                               append_u <- I(algo %in% 4:5 & iter > 1)
                                if(trace >= 1)cat("\nIter: ",iter,"\n",Reduce(paste0,rep("-",40)))
                                if(trace==2)t1 <- Sys.time()
-                               
                                # update the data for stan
                                data$Xb <- rtsModel__xb(private$ptr,private$cov_type,private$lp_type)
                                data$ZL <- rtsModel__L(private$ptr,private$cov_type,private$lp_type)
@@ -889,7 +1081,7 @@ grid <- R6::R6Class("grid",
                                  capture.output(fit <- mod$sample(data = data,
                                                                   chains = 1,
                                                                   iter_warmup = iter_warmup,
-                                                                  iter_sampling = iter_sampling,
+                                                                  iter_sampling = n_mcmc_sampling,
                                                                   refresh = 0),
                                                 file=tempfile())
                                  dsamps <- fit$draws("gamma",format = "matrix")
@@ -899,20 +1091,22 @@ grid <- R6::R6Class("grid",
                                  capture.output(suppressWarnings( res <- rstan::sampling(stanmodels[[filers]],
                                                                                          data=data,
                                                                                          chains=1,
-                                                                                         iter = iter_warmup+iter_sampling,
+                                                                                         iter = iter_warmup+n_mcmc_sampling,
                                                                                          warmup = iter_warmup,
                                                                                          cores = 1,
                                                                                          refresh = 0)), file=tempfile())
                                  dsamps <- rstan::extract(res,"gamma",permuted = FALSE)
-                                 dsamps <- dsamps[,1,]
-                                 rtsModel__update_u(private$ptr,as.matrix(t(dsamps)),private$cov_type,private$lp_type)
+                                 dsamps <- as.matrix(dsamps[,1,])
+                                 rtsModel__update_u(private$ptr,t(dsamps),append_u,private$cov_type,private$lp_type)
                                }
-                               if(trace==2)t2 <- Sys.time()
-                               td1 <- t2-t1
-                               if(trace==2)cat("\nMCMC sampling took: ",td1[[1]],attr(td1,"units"))
+                               if(trace==2){
+                                 t2 <- Sys.time()
+                                 td1 <- t2-t1
+                                 cat("\nMCMC sampling took: ",td1[[1]],attr(td1,"units"))
+                               }
                                
                                # step 2. fit beta 
-                               if(algo %in% c(1,3) & private$lp_type == 1){
+                               if(algo %in% c(1,3,6,8) & private$lp_type == 1){
                                  tryCatch(rtsModel__ml_beta(private$ptr,2,private$cov_type,private$lp_type),
                                           error = function(e){
                                             message(conditionMessage(e))
@@ -922,9 +1116,8 @@ grid <- R6::R6Class("grid",
                                } else {
                                  rtsModel__ml_beta(private$ptr,0,private$cov_type,private$lp_type)
                                }
-                               
                                if(is.null(known_theta)){
-                                 if(algo == 1){
+                                 if(algo %in% c(1,6)){
                                    tryCatch(rtsModel__ml_theta(private$ptr,2,private$cov_type,private$lp_type),
                                             error = function(e){
                                               message(conditionMessage(e))
@@ -935,7 +1128,7 @@ grid <- R6::R6Class("grid",
                                    rtsModel__ml_theta(private$ptr,0,private$cov_type,private$lp_type)
                                  }
                                 if(datlist$nT > 1){
-                                  if(algo == 1){
+                                  if(algo %in% c(1,6)){
                                     tryCatch(rtsModel__ml_rho(private$ptr,2,private$cov_type,private$lp_type),
                                              error = function(e){
                                                message(conditionMessage(e))
@@ -948,7 +1141,6 @@ grid <- R6::R6Class("grid",
                                 }
                                }
                                beta_new <- rtsModel__get_beta(private$ptr,private$cov_type,private$lp_type)
-                               
                                # step 3 fit covariance parameters
                                theta_new <- rtsModel__get_theta(private$ptr,private$cov_type,private$lp_type)
                                all_pars_new <- c(beta_new,theta_new)
@@ -956,12 +1148,27 @@ grid <- R6::R6Class("grid",
                                  rho_new <- rtsModel__get_rho(private$ptr,private$cov_type,private$lp_type)
                                  all_pars_new <- c(all_pars_new,rho_new)
                                }
-                               
+                               llvals <- rtsModel__get_log_likelihood_values(private$ptr,private$cov_type,private$lp_type)
+                               if(conv_criterion == 3){
+                                 converged <- !(beta_diff > tol & theta_diff > tol)
+                               } 
+                               if(iter > 1){
+                                 udiagnostic <- rtsModel__u_diagnostic(private$ptr,private$cov_type,private$lp_type)
+                                 uval <- ifelse(conv_criterion == 1, Reduce(sum,udiagnostic), udiagnostic$first)
+                                 llvar <- rtsModel__ll_diff_variance(private$ptr, TRUE, conv_criterion==1, private$cov_type,private$lp_type)
+                                 if(adaptive) n_mcmc_sampling <- max(n_mcmc_sampling, min(iter_sampling, ceiling(llvar * 6.182557)/uval^2)) # (qnorm(0.95) + qnorm(0.8))^2
+                                 if(conv_criterion %in% c(1,2)){
+                                   conv.criterion.value <- uval + qnorm(0.95)*sqrt(llvar/n_mcmc_sampling)
+                                   converged <- conv.criterion.value < 0
+                                 } 
+                               }
                                # some summary output
-                               if(trace==2)t3 <- Sys.time()
-                               td1 <- t3-t2
-                               if(trace==2)cat("\nModel fitting took: ",td1[[1]],attr(td1,"units"))
                                if(trace==2){
+                                 t3 <- Sys.time()
+                                 td1 <- t3-t2
+                                 cat("\nModel fitting took: ",td1[[1]],attr(td1,"units"))
+                               }
+                               if(trace>=1){
                                  cat("\nPARAMETER VALUES:\n")
                                  cat("\nBeta: ", beta_new)
                                  cat("\nTheta: ", theta_new)
@@ -971,14 +1178,18 @@ grid <- R6::R6Class("grid",
                                  cat("\nTheta diff: ", round(max(abs(theta-theta_new)),5))
                                  if(datlist$nT > 1) cat(" | Rho diff: ", round(abs(rho-rho_new),5))
                                  cat("\nMax. diff: ", round(max(abs(all_pars-all_pars_new)),5))
+                                 cat("\nLog-likelihoods: Fixed: ", round(llvals$first,5)," Covariance: ",round(llvals$second,5))
+                                 if(iter>1){
+                                   if(adaptive)cat("\nMCMC sample size (adaptive): ",n_mcmc_sampling)
+                                   cat("\nLog-lik diff values: ", round(udiagnostic$first,5),", ", round(udiagnostic$second,5)," overall: ", round(Reduce(sum,udiagnostic), 5))
+                                   cat("\nLog-lik variance: ", round(llvar,5))
+                                   if(conv_criterion %in% 1:2)cat(" convergence criterion:", round(conv.criterion.value,5))
+                                 }
                                  cat("\n",Reduce(paste0,rep("-",40)))
                                }
                              }
-                             
                              # end of algorithm. 
-                             not_conv <- iter > max.iter|any(abs(all_pars-all_pars_new)>tol)
-                             if(not_conv)message(paste0("algorithm not converged. Max. difference between iterations :",round(max(abs(all_pars-all_pars_new)),4)))
-                             
+                             if(!converged)message(paste0("algorithm not converged. Max. difference between iterations :",round(max(abs(all_pars-all_pars_new)),4)))
                              ## get the standard errors
                              if(trace >= 1)cat("\n\nCalculating standard errors...\n")
                              u <- rtsModel__u(private$ptr, private$cov_type,private$lp_type)
@@ -994,18 +1205,18 @@ grid <- R6::R6Class("grid",
                                M <- tryCatch(solve(M),error = function(i)return(diag(nrow(M))))
                              }
                              SE <- sqrt(diag(M))[1:length(beta)]
-                             
                              # prepare output
                              beta_names <- rtsModel__beta_parameter_names(private$ptr,private$cov_type,private$lp_type)
                              theta_names <- c("theta_1","theta_2")
                              rho_names <- "rho"
                              mf_pars_names <- c(beta_names, theta_names)
                              SE <- c(SE,NA,NA)
-                             if(datlist$nT > 1)SE <- c(SE,NA)
-                             SE <- c(SE,rep(NA,nrow(u)))
-                             if(datlist$nT > 1) mf_pars_names <- c(mf_pars_names, rho_names)
-                             res <- data.frame(par = c(mf_pars_names,paste0("d",1:nrow(u))),
-                                               est = c(all_pars_new,rowMeans(u)),
+                             if(datlist$nT > 1){
+                               SE <- c(SE,NA)
+                               mf_pars_names <- c(mf_pars_names, rho_names)
+                             }
+                             res <- data.frame(par = mf_pars_names,
+                                               est = all_pars_new,
                                                SE=SE,
                                                t = NA,
                                                p = NA,
@@ -1035,38 +1246,34 @@ grid <- R6::R6Class("grid",
                              t_diff <- t_end - t_start
                              if(trace == 2)cat("Total time: ", t_diff[[1]], " ", attr(t_diff,"units"))
                              out <- list(coefficients = res,
-                                         converged = !not_conv,
-                                         method = "mcem",
+                                         converged = converged,
+                                         approx = approx,
+                                         method = algo,
                                          m = dim(u)[2],
                                          tol = tol,
-                                         sim_lik = FALSE,
                                          aic = aic,
                                          se="gls",
                                          Rsq = c(cond = condR2,marg=margR2),
                                          logl = rtsModel__log_likelihood(private$ptr,private$cov_type,private$lp_type),
-                                         mean_form = "",
-                                         cov_form = "",
-                                         family = "poisson",
-                                         link = "log",
-                                         re.samps = u,
+                                         re.samps = u[,(ncol(u) - 2*iter_sampling + 1):ncol(u)],
                                          iter = iter,
                                          time = t_diff,
-                                         dof = length(xb),
-                                         P = length(beta_new),
-                                         Q = 2,
+                                         P = length(beta_names),
                                          var_par_family = FALSE,
                                          y=datlist$y,
-                                         y_predicted  = ypred)
-                             class(out) <- "mcmlrts"
-                             return(out)
+                                         y_predicted  = ypred[,(ncol(ypred) - 2*iter_sampling + 1):ncol(ypred)],
+                                         nT = datlist$nT,
+                                         conv_criterion = conv_criterion)
+                             class(out) <- "rtsFit"
+                             private$last_model_fit <- out
+                             return(invisible(out))
                            },
                            #' @description
                            #' Extract predictions
                            #'
-                           #' Extract incidence and relative risk predictions
+                           #' Extract incidence and relative risk predictions. The predictions will be extracted from the last model fit. If no previous model fit then use either `lgcp_ml()` or `lgcp_bayes()`, or see 
+                           #' `model_fit()` to update the stored model fit.
                            #'
-                           #' @param fit A \link[rstan]{stanfit}, `CmdStanMCMC`, `CmdStanVB`, or `mcmlrts` object.
-                           #' Output of `lgcp_fit()` or the output of `lgcp_fit_ml()` or `lgcp_fit_la()`
                            #' @param type Vector of character strings. Any combination of "pred", "rr", and "irr", which are,
                            #' posterior mean incidence (overall and population standardised), relative risk,
                            #' and incidence rate ratio, respectively.
@@ -1078,7 +1285,8 @@ grid <- R6::R6Class("grid",
                            #' @param verbose Logical indicating whether to print messages to the console
                            #' @return NULL
                            #' @details
-                           #' *EXTRACTING PREDICTIONS*
+                           #' **EXTRACTING PREDICTIONS**
+                           #' 
                            #' Three outputs can be extracted from the model fit, which will be added as columns to `grid_data`:
                            #'
                            #' Predicted incidence: If type includes `pred` then `pred_mean_total` and
@@ -1100,193 +1308,83 @@ grid <- R6::R6Class("grid",
                            #' is the relative change in incidence in the present period compared to a week
                            #' prior.
                            #' @examples
-                           #' \dontrun{
-                           #' b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
-                           #' g1 <- grid$new(b1,0.5)
-                           #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
-                           #' dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
-                           #' cov1 <- grid$new(b1,0.8)
-                           #' cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-                           #' g1$add_covariates(cov1,
-                           #'                   zcols="cov",
-                           #'                   verbose = FALSE)
-                           #' g1$points_to_grid(dp, laglength=5)
-                           #' g1$priors <- list(
-                           #'   prior_lscale=c(0,0.5),
-                           #'   prior_var=c(0,0.5),
-                           #'   prior_linpred_mean=c(0),
-                           #'   prior_linpred_sd=c(5)
-                           #'   )
-                           #' res <- g1$lgcp_fit(popdens="cov")
-                           #' g1$extract_preds(res,
-                           #'                  type=c("pred","rr"),
-                           #'                  popdens="cov")
-                           #' }
+                           #' # See examples for lgcp_bayes() and lgcp_ml()
                            #' @importFrom stats sd
-                           extract_preds = function(fit,
-                                                    type=c("pred","rr","irr"),
+                           extract_preds = function(type=c("pred","rr","irr"),
                                                     irr.lag=NULL,
                                                     t.lag=0,
                                                     popdens=NULL,
                                                     verbose = TRUE){
-
                              if("irr"%in%type&is.null(irr.lag))stop("For irr set irr.lag")
-                             if(!(is(fit,"CmdStanMCMC")|is(fit,"stanfit")|
-                                  is(fit,"CmdStanVB")|is(fit,"mcmlrts")))stop("stan fit or MCMCML fit required")
                              if("pred"%in%type&is.null(popdens))stop("set popdens for pred")
-
                              nCells <- nrow(self$grid_data)
                              nRegion <- ifelse(is.null(self$region_data),0,nrow(self$region_data))
-                             if(is(fit,"stanfit")){
-                               ypred <- rstan::extract(fit,"y_grid_predict")
-                               ypred <- ypred$y_grid_predict
-                               f <- rstan::extract(fit,"f")
-                               f <- f$f
-                               nT <- dim(ypred)[2]/nCells
-                               cmdst <- FALSE
-                             } else if(is(fit,"CmdStanMCMC")|is(fit,"CmdStanVB")){
-                               if(requireNamespace("cmdstanr")){
-                                 ypred <- fit$draws("y_grid_predict")
-                                 f <- fit$draws("f")
-                                 if(length(dim(ypred))==2){
-                                   #to convert to 3d if VB is used
-                                   ypred <- array(drop(ypred),dim = c(1,dim(ypred)))
-                                   f <- array(drop(f),dim = c(1,dim(f)))
-                                 }
-                                 nT <- dim(ypred)[3]/nCells
-                                 cmdst <- TRUE
-                               } else {
-                                 stop("No cmdstanr package")
-                               }
-                             } else if(is(fit,"mcmlrts")){
-                               ypred <- t(fit$y_predicted)
-                               f <- t(fit$re.samps)
-                               nT <- ncol(f)/nCells
-                               cmdst <- FALSE
-                             }
-
+                             nT <- nrow(private$last_model_fit$re.samps)/nCells
                              if(nT>1){
                                if("pred"%in%type){
                                  if(is.null(self$region_data)){
                                    popd <- as.data.frame(self$grid_data)[,popdens]
-                                   if(!cmdst){
-                                     fmu <- ypred[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE]/popd
-                                     self$grid_data$pred_mean_total <- apply(ypred[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],2,mean)
-                                     self$grid_data$pred_mean_total_sd <- apply(ypred[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],2,sd)
-                                     self$grid_data$pred_mean_pp <- apply(fmu,2,mean)
-                                     self$grid_data$pred_mean_pp_sd <- apply(fmu,2,sd)
-                                   } else {
-                                     fmu <- ypred[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE]/popd
-                                     self$grid_data$pred_mean_total <- apply(ypred[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],3,mean)
-                                     self$grid_data$pred_mean_total_sd <- apply(ypred[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],3,sd)
-                                     self$grid_data$pred_mean_pp <- apply(fmu,3,mean)
-                                     self$grid_data$pred_mean_pp_sd <- apply(fmu,3,sd)
-                                   }
+                                   fmu <- private$last_model_fit$y_predicted[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE]/popd
+                                   self$grid_data$pred_mean_total <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE],1,mean)
+                                   self$grid_data$pred_mean_total_sd <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE],1,sd)
+                                   self$grid_data$pred_mean_pp <- apply(fmu,1,mean)
+                                   self$grid_data$pred_mean_pp_sd <- apply(fmu,1,sd)
                                  } else {
                                    if(verbose)message("Predicted rates are added to region_data, rr and irr are added to grid_data")
                                    popd <- as.data.frame(self$region_data)[,popdens]
-                                   if(!cmdst){
-                                     fmu <- ypred[,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE]/popd
-                                     self$region_data$pred_mean_total <- apply(ypred[,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE],2,mean)
-                                     self$region_data$pred_mean_total_sd <- apply(ypred[,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE],2,sd)
-                                     self$region_data$pred_mean_pp <- apply(fmu,2,mean)
-                                     self$region_data$pred_mean_pp_sd <- apply(fmu,2,sd)
-                                   } else {
-                                     fmu <- ypred[,,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE]/popd
-                                     self$region_data$pred_mean_total <- apply(ypred[,,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE],3,mean)
-                                     self$region_data$pred_mean_total_sd <- apply(ypred[,,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE],3,sd)
-                                     self$region_data$pred_mean_pp <- apply(fmu,3,mean)
-                                     self$region_data$pred_mean_pp_sd <- apply(fmu,3,sd)
-                                   }
+                                   fmu <- private$last_model_fit$y_predicted[((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),,drop=FALSE]/popd
+                                   self$region_data$pred_mean_total <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),,drop=FALSE],1,mean)
+                                   self$region_data$pred_mean_total_sd <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),,drop=FALSE],1,sd)
+                                   self$region_data$pred_mean_pp <- apply(fmu,1,mean)
+                                   self$region_data$pred_mean_pp_sd <- apply(fmu,1,sd)
                                  }
                                }
-
                                if("rr"%in%type){
-                                 if(!cmdst){
-                                   self$grid_data$rr <- exp(apply(f[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],2,mean))
-                                   self$grid_data$rr_sd <- exp(apply(f[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],2,sd))
-                                 } else {
-                                   self$grid_data$rr <- exp(apply(f[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],3,mean))
-                                   self$grid_data$rr_sd <- exp(apply(f[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE],3,sd))
-                                 }
+                                 self$grid_data$rr <- exp(apply(private$last_model_fit$re.samps[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE],1,mean))
+                                 self$grid_data$rr_sd <- exp(apply(private$last_model_fit$re.samps[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE],1,sd))
                                }
-
                                if("irr"%in%type){
                                  if(is.null(self$region_data)){
-                                   if(!cmdst){
-                                     self$grid_data$irr <- apply(ypred[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE]/
-                                                                   ypred[,((nT-irr.lag-t.lag)*nCells+1):(((nT-t.lag)-irr.lag+1)*nCells),drop=FALSE],2,mean)
-                                     self$grid_data$irr_sd <- apply(ypred[,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE]/
-                                                                      ypred[,((nT-irr.lag-t.lag)*nCells+1):(((nT-t.lag)-irr.lag+1)*nCells),drop=FALSE],2,sd)
-                                   } else {
-                                     self$grid_data$irr <- apply(ypred[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE]/
-                                                                   ypred[,,((nT-irr.lag-t.lag)*nCells+1):(((nT-t.lag)-irr.lag+1)*nCells),drop=FALSE],3,mean)
-                                     self$grid_data$irr_sd <- apply(ypred[,,((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),drop=FALSE]/
-                                                                      ypred[,,((nT-irr.lag-t.lag)*nCells+1):(((nT-t.lag)-irr.lag+1)*nCells),drop=FALSE],3,sd)
-                                   }
+                                   self$grid_data$irr <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE]/
+                                                                 private$last_model_fit$y_predicted[((nT-irr.lag-t.lag)*nCells+1):(((nT-t.lag)-irr.lag+1)*nCells),,drop=FALSE],1,mean)
+                                   self$grid_data$irr_sd <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE]/
+                                                                    private$last_model_fit$y_predicted[((nT-irr.lag-t.lag)*nCells+1):(((nT-t.lag)-irr.lag+1)*nCells),,drop=FALSE],1,sd)
                                  } else {
-                                   if(!cmdst){
-                                     self$region_data$irr <- apply(ypred[,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE]/
-                                                                   ypred[,((nT-irr.lag-t.lag)*nRegion+1):(((nT-t.lag)-irr.lag+1)*nRegion),drop=FALSE],2,mean)
-                                     self$region_data$irr_sd <- apply(ypred[,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE]/
-                                                                      ypred[,((nT-irr.lag-t.lag)*nRegion+1):(((nT-t.lag)-irr.lag+1)*nRegion),drop=FALSE],2,sd)
-                                   } else {
-                                     self$region_data$irr <- apply(ypred[,,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE]/
-                                                                   ypred[,,((nT-irr.lag-t.lag)*nRegion+1):(((nT-t.lag)-irr.lag+1)*nRegion),drop=FALSE],3,mean)
-                                     self$region_data$irr_sd <- apply(ypred[,,((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),drop=FALSE]/
-                                                                      ypred[,,((nT-irr.lag-t.lag)*nRegion+1):(((nT-t.lag)-irr.lag+1)*nRegion),drop=FALSE],3,sd)
-                                   }
+                                   self$region_data$irr <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),,drop=FALSE]/
+                                                                   private$last_model_fit$y_predicted[((nT-irr.lag-t.lag)*nRegion+1):(((nT-t.lag)-irr.lag+1)*nRegion),,drop=FALSE],1,mean)
+                                   self$region_data$irr_sd <- apply(private$last_model_fit$y_predicted[((nT-1-t.lag)*nRegion+1):((nT-t.lag)*nRegion),,drop=FALSE]/
+                                                                      private$last_model_fit$y_predicted[((nT-irr.lag-t.lag)*nRegion+1):(((nT-t.lag)-irr.lag+1)*nRegion),,drop=FALSE],1,sd)
                                  }
                                }
                              } else {
                                if("irr"%in%type)stop("cannot estimate irr as only one time period")
                                if("pred"%in%type){
                                  if(is.null(self$region_data)){
-                                   if(!cmdst){
-                                     fmu <- ypred/as.data.frame(self$grid_data)[,popdens]
-                                     self$grid_data$pred_mean_total <- apply(ypred,2,mean)
-                                     self$grid_data$pred_mean_total_sd <- apply(ypred,2,sd)
-                                     self$grid_data$pred_mean_pp <- apply(fmu,2,mean)
-                                     self$grid_data$pred_mean_pp_sd <- apply(fmu,2,sd)
-                                   } else {
-                                     fmu <- ypred/as.data.frame(self$grid_data)[,popdens]
-                                     self$grid_data$pred_mean_total <- apply(ypred,3,mean)
-                                     self$grid_data$pred_mean_total_sd <- apply(ypred,3,sd)
-                                     self$grid_data$pred_mean_pp <- apply(fmu,3,mean)
-                                     self$grid_data$pred_mean_pp_sd <- apply(fmu,3,sd)
-                                   }
+                                   fmu <- private$last_model_fit$y_predicted/as.data.frame(self$grid_data)[,popdens]
+                                   self$grid_data$pred_mean_total <- apply(private$last_model_fit$y_predicted,1,mean)
+                                   self$grid_data$pred_mean_total_sd <- apply(private$last_model_fit$y_predicted,1,sd)
+                                   self$grid_data$pred_mean_pp <- apply(fmu,1,mean)
+                                   self$grid_data$pred_mean_pp_sd <- apply(fmu,1,sd)
                                  } else {
-                                   if(!cmdst){
-                                     fmu <- ypred/as.data.frame(self$region_data)[,popdens]
-                                     self$region_data$pred_mean_total <- apply(ypred,2,mean)
-                                     self$region_data$pred_mean_total_sd <- apply(ypred,2,sd)
-                                     self$region_data$pred_mean_pp <- apply(fmu,2,mean)
-                                     self$region_data$pred_mean_pp_sd <- apply(fmu,2,sd)
-                                   } else {
-                                     fmu <- ypred/as.data.frame(self$region_data)[,popdens]
-                                     self$region_data$pred_mean_total <- apply(ypred,3,mean)
-                                     self$region_data$pred_mean_total_sd <- apply(ypred,3,sd)
-                                     self$region_data$pred_mean_pp <- apply(fmu,3,mean)
-                                     self$region_data$pred_mean_pp_sd <- apply(fmu,3,sd)
-                                   }
+                                   fmu <- private$last_model_fit$y_predicted/as.data.frame(self$region_data)[,popdens]
+                                   self$region_data$pred_mean_total <- apply(private$last_model_fit$y_predicted,1,mean)
+                                   self$region_data$pred_mean_total_sd <- apply(private$last_model_fit$y_predicted,1,sd)
+                                   self$region_data$pred_mean_pp <- apply(fmu,1,mean)
+                                   self$region_data$pred_mean_pp_sd <- apply(fmu,1,sd)
                                  }
                                }
-
                                if("rr"%in%type){
-                                 if(!cmdst){
-                                   self$grid_data$rr <- exp(apply(f,2,mean))
-                                   self$grid_data$rr_sd <- exp(apply(f,2,sd))
-                                 } else {
-                                   self$grid_data$rr <- exp(apply(f,3,mean))
-                                   self$grid_data$rr_sd <- exp(apply(f,3,sd))
-                                 }
+                                 self$grid_data$rr <- exp(apply(private$last_model_fit$re.samps,1,mean))
+                                 self$grid_data$rr_sd <- exp(apply(private$last_model_fit$re.samps,1,sd))
                                }
                              }
                            },
                            #' @description
-                           #' Hotspots
-                           #'
                            #' Generate hotspot probabilities
+                           #'
+                           #' Generate hotspot probabilities. The last model fit will be used to extract
+                           #' predictions. If no previous model fit then use either `lgcp_ml()` or `lgcp_bayes()`, or see 
+                           #' `model_fit()` to update the stored model fit.
                            #'
                            #' Given a definition of a hotspot in terms of threshold(s) for incidence,
                            #' relative risk, and/or incidence rate ratio, returns the probabilities
@@ -1294,8 +1392,6 @@ grid <- R6::R6Class("grid",
                            #' will be added to `grid_data`. Note that for incidence threshold, the threshold should
                            #' be specified as the per individual incidence.
                            #'
-                           #' @param fit A \link[rstan]{stanfit}, `CmdStanMCMC`, `CmdStanVB`, or `mcmlrts` object.
-                           #' Output of `lgcp_bayes()` or `lgcp_ml()`
                            #' @param incidence.threshold Numeric. Threshold of population standardised incidence
                            #' above which an area is a hotspot
                            #' @param irr.threshold Numeric. Threshold of incidence rate ratio
@@ -1304,6 +1400,7 @@ grid <- R6::R6Class("grid",
                            #' Only required if `irr.threshold` is not `NULL`.
                            #' @param rr.threshold numeric. Threshold of local relative risk
                            #' above which an area is a hotspot
+                           #' @param t.lag integer. Extract predictions for incidence or relative risk for previous time periods.
                            #' @param popdens character string. Name of variable in `grid_data`
                            #' specifying the population density. Needed if `incidence.threshold` is not
                            #' `NULL`
@@ -1312,123 +1409,68 @@ grid <- R6::R6Class("grid",
                            #' @return None, called for effects. Columns are added to grid or region data.
                            #' @examples
                            #' \dontrun{
-                           #' b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
-                           #' g1 <- grid$new(b1,0.5)
-                           #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
-                           #' dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
-                           #' cov1 <- grid$new(b1,0.8)
-                           #' cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-                           #' g1$add_covariates(cov1,
-                           #'                   zcols="cov",
-                           #'                   verbose = FALSE)
-                           #' g1$points_to_grid(dp, laglength=5)
-                           #' g1$priors <- list(
-                           #'   prior_lscale=c(0,0.5),
-                           #'   prior_var=c(0,0.5),
-                           #'   prior_linpred_mean=c(0),
-                           #'   prior_linpred_sd=c(5)
-                           #'   )
-                           #' res <- g1$lgcp_fit(popdens="cov")
-                           #' g1$hotspots(res,
-                           #'             incidence.threshold=1,
-                           #'             popdens="cov")
+                           #' # See examples for lgcp_bayes() and lgcp_ml()
                            #' }
-                           hotspots = function(fit,
-                                               incidence.threshold=NULL,
+                           hotspots = function(incidence.threshold=NULL,
                                                irr.threshold=NULL,
-                                               irr.lag=NULL,
+                                               irr.lag=1,
                                                rr.threshold=NULL,
+                                               t.lag=0,
                                                popdens,
                                                col_label=NULL){
 
                              if(all(is.null(incidence.threshold),is.null(irr.threshold),is.null(rr.threshold)))stop("At least one criterion required.")
                              if(!is.null(irr.threshold)&is.null(irr.lag))stop("irr.lag must be set")
-                             if(!(is(fit,"CmdStanMCMC")|is(fit,"CmdStanVB")|is(fit,"stanfit")|is(fit,"mcmlrts")))stop("model fit required")
                              if(!is.null(self$region_data) & !is.null(rr.threshold) & (!is.null(irr.threshold) | !is.null(incidence.threshold)))stop("Cannot combine region-level measures (IRR/incidence) with grid relative risk.")
-                             
                              useRegion <- FALSE
                              if(!is.null(self$region_data) & is.null(rr.threshold))useRegion <- TRUE
-                             
                              nCells <- nrow(self$grid_data)
                              nRegion <- ifelse(is.null(self$region_data),0,nrow(self$region_data))
-                             if(is(fit,"stanfit")){
-                               ypred <- rstan::extract(fit,"y_grid_predict")$y_grid_predict
-                               f <- rstan::extract(fit,"f")$f
-                               nT <- dim(ypred)[2]/nCells
-                               f <- f[,((nT-1)*nCells+1):(nT*nCells),drop=FALSE]
-                             } else if(is(fit,"CmdStanMCMC")){
-                               if(requireNamespace("cmdstanr")){
-                                 ypred <- fit$draws("y_grid_predict")
-                                 ypred <- matrix(ypred, prod(dim(ypred)[1:2]), dim(ypred)[3])
-                                 nT <- dim(ypred)[3]/nCells
-                                 f <- fit$draws("f")
-                                 f <- f[,,((nT-1)*nCells+1):(nT*nCells),drop=FALSE]
-                                 f <- matrix(f, prod(dim(f)[1:2]), dim(f)[3])
-                               }
-                             } else if(is(fit,"CmdStanVB")){
-                               if(requireNamespace("cmdstanr")){
-                                 ypred <- fit$draws("y_grid_predict")
-                                 nT <- dim(ypred)[3]/nCells
-                                 f <- fit$draws("f")
-                                 f <- f[,((nT-1)*nCells+1):(nT*nCells),drop=FALSE]
-                               }
-                             } else if(is(fit,"mcmlrts")){
-                               ypred <- t(fit$y_predicted)
-                               f <- t(fit$re.samps)
-                               nT <- ncol(f)/nCells
-                               f <- f[,((nT-1)*nCells+1):(nT*nCells),drop=FALSE]
-                             }
-
+                             nI <- ncol(private$last_model_fit$re.samps)
+                             nT <- nrow(private$last_model_fit$re.samps)/nCells
                              nCr <- sum(c(!is.null(incidence.threshold),
                                           !is.null(irr.threshold),
                                           !is.null(rr.threshold)))
-                             inc1 <- matrix(0,nrow=nrow(f),ncol=ifelse(useRegion,nRegion,nCells))
-
+                             if(!is.null(irr.threshold) & nT < irr.lag) stop("IRR lag too large")
+                             if((!is.null(incidence.threshold) | !is.null(rr.threshold)) & nT < t.lag)stop("t lag too large")
+                             inc1 <- matrix(0,nrow=ifelse(useRegion,nRegion,nCells),ncol=nI)
                              if(!is.null(incidence.threshold)){
+                               if(missing(popdens)){
+                                 popval <- rep(1,nrow(self$grid_data))
+                               } else {
+                                 popval <- as.data.frame(self$grid_data)[,popdens]
+                               }
                                if(!useRegion){
-                                 fmu <- matrix(0,nrow=nrow(f),ncol=nCells)
-                                 for(i in 1:nCells){
-                                   fmu[,i] <- ypred[,((nT-1)*nCells+i)]/as.data.frame(self$grid_data)[i,popdens]
-                                 }
+                                 fmu <- matrix(0,nrow=nCells,ncol=nI)
+                                 for(i in 1:nCells) fmu[i,] <- private$last_model_fit$y_predicted[((nT-1-t.lag)*nCells+i),]/popval[i]
                                  inc1 <- inc1 + I(fmu > incidence.threshold)*1
                                } else {
-                                 fmu <- matrix(0,nrow=nrow(f),ncol=nRegion)
-                                 for(i in 1:nRegion){
-                                   fmu[,i] <- ypred[,((nT-1)*nRegion+i)]/as.data.frame(self$region_data)[i,popdens]
-                                 }
+                                 fmu <- matrix(0,nrow=nRegion,ncol=nI)
+                                 for(i in 1:nRegion) fmu[i,] <- private$last_model_fit$y_predicted[((nT-1-t.lag)*nRegion+i),]/popval[i]
                                  inc1 <- inc1 + I(fmu > incidence.threshold)*1
                                }
                              }
-
                              if(!is.null(irr.threshold)){
                                if(!useRegion){
                                  if(nT==1)stop("cannot estimate irr as only one time period") else {
-                                   inc1 <- inc1 + I(ypred[,((nT-1)*nCells+1):(nT*nCells),drop=FALSE]/
-                                                      ypred[,((nT-irr.lag)*nCells+1):((nT-irr.lag+1)*nCells),drop=FALSE] > irr.threshold)*1
+                                   inc1 <- inc1 + I(private$last_model_fit$y_predicted[((nT-1)*nCells+1):(nT*nCells),,drop=FALSE]/
+                                                      private$last_model_fit$y_predicted[((nT-irr.lag)*nCells+1):((nT-irr.lag+1)*nCells),,drop=FALSE] > irr.threshold)*1
                                  }
                                } else {
                                  if(nT==1)stop("cannot estimate irr as only one time period") else {
-                                   inc1 <- inc1 + I(ypred[,((nT-1)*nRegion+1):(nT*nRegion),drop=FALSE]/
-                                                      ypred[,((nT-irr.lag)*nRegion+1):((nT-irr.lag+1)*nRegion),drop=FALSE] > irr.threshold)*1
+                                   inc1 <- inc1 + I(private$last_model_fit$y_predicted[((nT-1)*nRegion+1):(nT*nRegion),,drop=FALSE]/
+                                                      private$last_model_fit$y_predicted[((nT-irr.lag)*nRegion+1):((nT-irr.lag+1)*nRegion),,drop=FALSE] > irr.threshold)*1
                                  }
                                }
                              }
-
-                             if(!is.null(rr.threshold)){
-                               inc1 <- inc1 + I(exp(f) > rr.threshold)*1
-                             }
-
+                             if(!is.null(rr.threshold)) inc1 <- inc1 + I(exp(private$last_model_fit$re.samps[((nT-t.lag-1)*nCells+1):((nT-t.lag)*nCells),,drop=FALSE]) > rr.threshold)*1
                              inc1 <- I(inc1 == nCr)*1
                              if(useRegion){
-                               self$region_data$hotspot_prob <- apply(inc1,2,mean)
-                               if(!is.null(col_label)){
-                                 colnames(self$region_data)[length(colnames(self$region_data))] <- col_label
-                               }
+                               self$region_data$hotspot_prob <- apply(inc1,1,mean)
+                               if(!is.null(col_label)) colnames(self$region_data)[length(colnames(self$region_data))] <- col_label
                              } else {
-                               self$grid_data$hotspot_prob <- apply(inc1,2,mean)
-                               if(!is.null(col_label)){
-                                 colnames(self$grid_data)[length(colnames(self$grid_data))] <- col_label
-                               }
+                               self$grid_data$hotspot_prob <- apply(inc1,1,mean)
+                               if(!is.null(col_label)) colnames(self$grid_data)[length(colnames(self$grid_data))] <- col_label
                              }
                            },
                            #' @description
@@ -1447,7 +1489,7 @@ grid <- R6::R6Class("grid",
                            #' @return An `sf` object identical to `new_geom` with additional columns with the
                            #' variables specified in `zcols`
                            #' @examples
-                           #' \dontrun{
+                           #' \donttest{
                            #' b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
                            #' g1 <- grid$new(b1,0.5)
                            #' dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
@@ -1523,7 +1565,7 @@ grid <- R6::R6Class("grid",
                            #' @description
                            #' Returns scale conversion factor
                            #'
-                           #' Coordinates are scaled to `[-1,1]` for `lgcp_fit()`. This function
+                           #' Coordinates are scaled to `[-1,1]` for LGCP models fit with HSGP. This function
                            #' returns the scaling factor for this conversion.
                            #'
                            #' @return numeric
@@ -1535,7 +1577,7 @@ grid <- R6::R6Class("grid",
                              x_grid <- as.data.frame(suppressWarnings(sf::st_coordinates(sf::st_centroid(self$grid_data))))
                              xrange <- range(x_grid[,1])
                              yrange <- range(x_grid[,2])
-                             std_val <- max(max(xrange - mean(xrange)),max(yrange - mean(yrange)))
+                             std_val <- max(diff(xrange),diff(yrange))
                              return(std_val)
                            },
                            #' @description 
@@ -1731,7 +1773,7 @@ grid <- R6::R6Class("grid",
                                                          FALSE))
                            },
                            #' @description 
-                           #' Returns the random effects stored in the object (if any) after using MCMCML fitting. For example, 
+                           #' Returns the random effects stored in the object (if any) after using ML fitting. It's main use is
                            #' if a fitting procedure is stopped, the random effects can still be returned.
                            #' @return A matrix of random effects samples if a MCMCML model has been initialised, otherwise returns FALSE
                            get_random_effects = function(){
@@ -1740,6 +1782,23 @@ grid <- R6::R6Class("grid",
                                return(u)
                              } else {
                                return(FALSE)
+                             }
+                           },
+                           #' @description
+                           #' Either returns the stored last model fit with either `lgcp_ml` or `lgcp_bayes`, or updates 
+                           #' the saved model fit if an object is provided.
+                           #' @param fit Optional. A previous `rtsFit` object. If provided then the function updates the internally stored model fit.
+                           #' @return Either a `rtsFit` object or nothing if no model has been previously fit, or if the fit is updated.
+                           model_fit = function(fit = NULL){
+                             if(!is.null(fit) & !is(fit,"rtsFit"))stop("fit must be an rtsFit")
+                             if(is.null(fit)){
+                               if(!is.null(private$last_model_fit)) {
+                                 return(private$last_model_fit)
+                               } else {
+                                 message("No stored model fit")
+                               }
+                             } else {
+                               private$last_model_fit <- fit
                              }
                            }
                          ),
@@ -1750,6 +1809,7 @@ grid <- R6::R6Class("grid",
                       region_ptr = NULL,
                       cov_type = 1,
                       lp_type = 1,
+                      last_model_fit = NULL,
                       update_ptr = function(m,
                                             model,
                                             approx,
@@ -1987,27 +2047,24 @@ grid <- R6::R6Class("grid",
                             }
                           }
                         }
-                        
                         nCell <- nrow(self$grid_data)
-                        
-                        x_grid <- as.data.frame(suppressWarnings(sf::st_coordinates(
-                          sf::st_centroid(self$grid_data))))
-                        
-                        
+                        x_grid <- as.data.frame(suppressWarnings(sf::st_coordinates(sf::st_centroid(self$grid_data))))
                         if(approx=="hsgp"){
                           # scale to -1,1 in all dimensions
                           xrange <- range(x_grid[,1])
                           yrange <- range(x_grid[,2])
-                          std_val <- max(max(xrange - mean(xrange)),max(yrange - mean(yrange)))
-                          diffs <- c((xrange[1]+xrange[2])/2, (yrange[1]+yrange[2])/2)
+                          scale_f <- max(diff(xrange), diff(yrange))
+                          x_grid[,1] <- -1 + 2*(x_grid[,1] - xrange[1])/scale_f
+                          x_grid[,2] <- -1 + 2*(x_grid[,2] - yrange[1])/scale_f
+                          # std_val <- max(max(xrange - mean(xrange)),max(yrange - mean(yrange)))
+                          # diffs <- c((xrange[1]+xrange[2])/2, (yrange[1]+yrange[2])/2)
                           # x_grid[,1] <- (x_grid[,1]- mean(xrange))/std_val
                           # x_grid[,2] <- (x_grid[,2]- mean(yrange))/std_val
-                          x_grid[,1] <- (x_grid[,1]- diffs[1])
-                          x_grid[,2] <- (x_grid[,2]- diffs[2])
-                          L_boundary <- c(L*(xrange[2]-xrange[1])/2, L*(yrange[2]-yrange[1])/2)
+                          # x_grid[,1] <- (x_grid[,1]- diffs[1])
+                          # x_grid[,2] <- (x_grid[,2]- diffs[2])
+                          # L_boundary <- c(L*(xrange[2]-xrange[1])/2, L*(yrange[2]-yrange[1])/2)
+                          L_boundary <- c(L,L)
                         }
-                        
-                        
                         if(is.null(self$region_data)){
                           # outcome data
                           if(nT > 1){
@@ -2015,7 +2072,6 @@ grid <- R6::R6Class("grid",
                           } else {
                             y <- as.data.frame(self$grid_data)[,"y"]
                           }
-                          
                           #population density
                           nColP <- sum(grepl(popdens,colnames(self$grid_data)))
                           if(nColP==1){
@@ -2029,7 +2085,6 @@ grid <- R6::R6Class("grid",
                               popd <- as.data.frame(self$grid_data)[,popdens]
                             }
                           }
-                          
                           #add covariates
                           if(!is.null(covs)){
                             nQ <- length(covs)
@@ -2061,7 +2116,6 @@ grid <- R6::R6Class("grid",
                           } else {
                             y <- as.data.frame(self$region_data)[,"y"]
                           }
-                          
                           #population density
                           nColP <- sum(grepl(popdens,colnames(self$region_data)))
                           if(nColP==1){
@@ -2075,7 +2129,6 @@ grid <- R6::R6Class("grid",
                               popd <- as.data.frame(self$region_data)[,popdens]
                             }
                           }
-                          
                           #add covariates
                           if(!is.null(covs)){
                             nQ <- length(covs)
@@ -2122,7 +2175,6 @@ grid <- R6::R6Class("grid",
                             X_g <- matrix(0,nrow=nrow(self$grid_data)*nT,ncol=1)
                           }
                         }
-                        
                         if(bayes){
                           if(!is.null(self$priors)){
                             if(length(self$priors$prior_linpred_mean)!=Q|length(self$priors$prior_linpred_sd)!=Q)
@@ -2139,7 +2191,6 @@ grid <- R6::R6Class("grid",
                             )
                           }
                         }
-                        
                         if(verbose)message(paste0(nCell," grid cells ",nT," time periods, and ",Q," covariates. Starting sampling..."))
                         if(approx == "hsgp"){
                           datlist <- list(
@@ -2157,7 +2208,6 @@ grid <- R6::R6Class("grid",
                             X= X,
                             mod = mod
                           )
-                          
                           if(!is.null(self$region_data)){
                             ncell <- unname(table(private$intersection_data$region_id))
                             ncell <- c(1, cumsum(ncell)+1)
@@ -2172,8 +2222,6 @@ grid <- R6::R6Class("grid",
                             ))
                             if(length(covs_grid)>0)datlist$x_grid <- cbind(datlist$x_grid,as.data.frame(self$grid_data)[,covs_grid])
                           } 
-                          
-                          
                         } else if(approx == "nngp"){
                           if(is.null(private$grid_ptr)){
                             private$grid_ptr <- GridData__new(as.matrix(x_grid[,1:2]),nT)
@@ -2208,8 +2256,6 @@ grid <- R6::R6Class("grid",
                             ))
                             if(length(covs_grid)>0)datlist$x_grid <- cbind(datlist$x_grid,as.data.frame(self$grid_data)[,covs_grid])
                           } 
-                          
-                          
                         } else {
                           datlist <- list(
                             D = 2,
@@ -2222,7 +2268,6 @@ grid <- R6::R6Class("grid",
                             X = X,
                             mod = mod
                           )
-                          
                           if(!is.null(self$region_data)){
                             ncell <- unname(table(private$intersection_data$region_id))
                             ncell <- c(1,cumsum(ncell)+1)
@@ -2238,14 +2283,12 @@ grid <- R6::R6Class("grid",
                             if(length(covs_grid)>0)datlist$x_grid <- cbind(datlist$x_grid,as.data.frame(self$grid_data)[,covs_grid])
                           } 
                         }
-                        
                         if(bayes){
                           datlist <- append(datlist,list(prior_lscale=self$priors$prior_lscale,
                                                          prior_var=self$priors$prior_var,
                                                          prior_linpred_mean = as.array(self$priors$prior_linpred_mean),
                                                          prior_linpred_sd=as.array(self$priors$prior_linpred_sd)))
                         }
-                        
                         return(datlist)
                       }
                     ))
