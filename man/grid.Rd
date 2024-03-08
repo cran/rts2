@@ -369,7 +369,7 @@ dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
 dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
 cov1 <- grid$new(b1,0.8)
 cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-g1$add_covariates(cov1,
+g1$add_covariates(cov1$grid_data,
                   zcols="cov",
                   verbose = FALSE)
 g1$points_to_grid(dp, laglength=5)
@@ -379,11 +379,11 @@ g1$priors <- list(
   prior_linpred_mean=c(0),
   prior_linpred_sd=c(5)
   )
-res <- g1$lgcp_fit(popdens="cov")
+res <- g1$lgcp_bayes(popdens="cov", parallel_chains = 1)
 g1$extract_preds(res,
                  type=c("pred","rr"),
                  popdens="cov")
-new1 <- g1$aggregate_output(cov1,
+new1 <- g1$aggregate_output(cov1$grid_data,
                             zcols="rr")
 }
 
@@ -1155,7 +1155,7 @@ dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3),date=paste0("2021-01-",11:20))
 dp <- create_points(dp,pos_vars = c('y','x'),t_var='date')
 cov1 <- grid$new(b1,0.8)
 cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-g1$add_covariates(cov1,
+g1$add_covariates(cov1$grid_data,
                   zcols="cov",
                   verbose = FALSE)
 g1$points_to_grid(dp, laglength=5)
@@ -1165,11 +1165,11 @@ g1$priors <- list(
   prior_linpred_mean=c(0),
   prior_linpred_sd=c(5)
   )
-res <- g1$lgcp_fit(popdens="cov")
+res <- g1$lgcp_bayes(popdens="cov", parallel_chains = 1)
 g1$extract_preds(res,
                  type=c("pred","rr"),
                  popdens="cov")
-new1 <- g1$aggregate_output(cov1,
+new1 <- g1$aggregate_output(cov1$grid_data,
                             zcols="rr")
 }
 }
