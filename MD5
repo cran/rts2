@@ -1,12 +1,12 @@
-fbe59712baad0c87ea616f11e3d69804 *DESCRIPTION
+5d8d0ecf648a83f4307cf8c1bd40e1eb *DESCRIPTION
 a0026f9792d97d5f4d4803232f4c8213 *NAMESPACE
 453f180a2fcf5ea5521d0dc1599bb6ac *R/RcppExports.R
 9c0cd429eaa4e3352dfe3a1b01d259c1 *R/data_functions.R
-bb5dbd98e128b0c8af66a8873000a870 *R/griddata_class.R
+06473e3e7499363d5f4691d19e7b8250 *R/griddata_class.R
 95f43dda6522b3195f44983c7a7cd965 *R/print_mcmlrts.R
 69aefd5e011eaebdb8feb782fe272e8a *R/rts2-package.R
 a65c8ccaccb33c928c33dc06a7fcbca1 *R/stanmodels.R
-e7e67e0c6485b1193c353a52aa7bae58 *build/partial.rdb
+b42c973098a0718ed94fc9774938bfea *build/partial.rdb
 87d037c7e11daa688a83e650aad05624 *data/birmingham_crime.rda
 a46413898b23ab4c3444997ed8114ff7 *data/boundary.rda
 5371209e6763e3d6c61b5184093a5c85 *data/example_points.rda
@@ -29,7 +29,7 @@ bceef6fd993b931a37d89f8336a07c55 *inst/cmdstan/rtsapproxlgcp_nngp_L_cmd.stan
 a4bf8c1f5ddeafcf019e1a973a7b2032 *inst/include/rts/rtsmaths.h
 107cd0282eb2afdd6ac01619bb01b7d2 *inst/include/rts/rtsmodel.h
 65274f98a5f2efa88695e5d5fa263cab *inst/include/rts/rtsmodelbits.h
-25cc9d7a73119162cbf52b8e55b456bf *inst/include/rts/rtsmodeloptim.h
+347631b06b1b8b0e1378b20023ba8578 *inst/include/rts/rtsmodeloptim.h
 7d2e90e8abd15f2b1d00f11540fbfb41 *inst/include/rts/rtsregionmodel.h
 60234507274dac9e422892b23c0e815d *inst/include/rts/rtsregionmodeloptim.h
 8cf90fd56dcae52253bfdde179eb044b *inst/include/rtsheader.h
