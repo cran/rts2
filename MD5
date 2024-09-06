@@ -1,4 +1,4 @@
-5d8d0ecf648a83f4307cf8c1bd40e1eb *DESCRIPTION
+878c3a6ea1e40e1b46e48d8cc61c2db7 *DESCRIPTION
 a0026f9792d97d5f4d4803232f4c8213 *NAMESPACE
 453f180a2fcf5ea5521d0dc1599bb6ac *R/RcppExports.R
 9c0cd429eaa4e3352dfe3a1b01d259c1 *R/data_functions.R
@@ -6,7 +6,7 @@ a0026f9792d97d5f4d4803232f4c8213 *NAMESPACE
 95f43dda6522b3195f44983c7a7cd965 *R/print_mcmlrts.R
 69aefd5e011eaebdb8feb782fe272e8a *R/rts2-package.R
 a65c8ccaccb33c928c33dc06a7fcbca1 *R/stanmodels.R
-b42c973098a0718ed94fc9774938bfea *build/partial.rdb
+d33ec0b68071816f17c1a7935b648184 *build/partial.rdb
 87d037c7e11daa688a83e650aad05624 *data/birmingham_crime.rda
 a46413898b23ab4c3444997ed8114ff7 *data/boundary.rda
 5371209e6763e3d6c61b5184093a5c85 *data/example_points.rda
@@ -28,10 +28,10 @@ bceef6fd993b931a37d89f8336a07c55 *inst/cmdstan/rtsapproxlgcp_nngp_L_cmd.stan
 02f5b1d4f5624edbac9c9b85297ee80b *inst/include/rts/regionlinearpredictor.h
 a4bf8c1f5ddeafcf019e1a973a7b2032 *inst/include/rts/rtsmaths.h
 107cd0282eb2afdd6ac01619bb01b7d2 *inst/include/rts/rtsmodel.h
-65274f98a5f2efa88695e5d5fa263cab *inst/include/rts/rtsmodelbits.h
+fb753fa586aebeb7231eefc336b65433 *inst/include/rts/rtsmodelbits.h
 347631b06b1b8b0e1378b20023ba8578 *inst/include/rts/rtsmodeloptim.h
 7d2e90e8abd15f2b1d00f11540fbfb41 *inst/include/rts/rtsregionmodel.h
-60234507274dac9e422892b23c0e815d *inst/include/rts/rtsregionmodeloptim.h
+32ea5520717af9dc91ebc7a5a039a218 *inst/include/rts/rtsregionmodeloptim.h
 8cf90fd56dcae52253bfdde179eb044b *inst/include/rtsheader.h
 855c064dbf8deaff96c8dc8a87169109 *inst/include/stan_meta_header.hpp
 7ec9f5aa619fd6a9e3ea8d783eda9685 *inst/stan/include/license.stan
