@@ -2,12 +2,12 @@
 
 #include <Rcpp.h>
 using namespace Rcpp ;
-#include "stanExports_rtslgcp.h"
+#include "stanExports_rtsbayes.h"
 
-RCPP_MODULE(stan_fit4rtslgcp_mod) {
+RCPP_MODULE(stan_fit4rtsbayes_mod) {
 
 
-    class_<rstan::stan_fit<stan_model, boost::random::ecuyer1988> >("rstantools_model_rtslgcp")
+    class_<rstan::stan_fit<stan_model, boost::random::ecuyer1988> >("rstantools_model_rtsbayes")
 
     .constructor<SEXP,SEXP,SEXP>()
 
