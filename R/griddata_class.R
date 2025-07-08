@@ -210,6 +210,8 @@ grid <- R6::R6Class("grid",
                            #' length of the time windows in which to count cases
                            #' @param laglength integer The number of time periods to include counting back from the most
                            #' recent time period
+                           #' @param date_format String describing the format of the date in the data as a combination of "d" days, "m" months, 
+                           #' and "y" years, either "dmy", "myd", "ymd", "ydm", "dym" "mdy" as used by the lubridate package.
                            #' @param verbose Logical indicating whether to report detailed output
                            #' @return NULL
                            #' @seealso \link[rts2]{create_points}
@@ -223,6 +225,7 @@ grid <- R6::R6Class("grid",
                            points_to_grid = function(point_data,
                                                      t_win = c("day"),
                                                      laglength = 14,
+                                                     date_format = "ymd",
                                                      verbose = TRUE){
 
                              if(!is(point_data,"sf"))stop("points not sf")
@@ -230,38 +233,40 @@ grid <- R6::R6Class("grid",
                                warning("CRS not equal. Setting st_crs(point_data)==st_crs(self$grid_data)")
                                sf::st_crs(point_data) <- sf::st_crs(self$grid_data)
                              }
+                             if("y"%in%colnames(self$grid_data))self$grid_data <- self$grid_data[,-which(colnames(self$grid_data)=="y")]
+                             nT <- sum(grepl("\\bt[0-9]",colnames(self$grid_data)))
+                             if(nT > 0){
+                               tidx <- which(grepl("\\bt[0-9]",colnames(self$grid_data)))
+                               self$grid_data <- self$grid_data[,-tidx]
+                               tidx <- which(grepl("\\bdate[0-9]",colnames(self$grid_data)))
+                               self$grid_data <- self$grid_data[,-tidx]
+                             }
+                             
                              if("t"%in%colnames(point_data)){
-                               if(!t_win%in%c("day","week","month"))stop("t_win not day, week, or month")
-                               #get unique time values to summarise over
-                               tvals <- c(as.Date(min(point_data$t)),as.Date(max(point_data$t)))
-                               yvals <- lubridate::year(tvals[1]):lubridate::year(tvals[2])
-                               tuniq <- tvals[1]:tvals[2]
-                               tuniq <- as.Date(tuniq,origin=as.Date("1970-01-01"))
-
-                               if(t_win=="day"){
-                                 tdat <- paste0(lubridate::yday(point_data$t),".",lubridate::year(point_data$t))
-                                 tuniq <- paste0(lubridate::yday(tuniq),".",lubridate::year(tuniq))
-                               }
-                               if(t_win=="week"){
-                                 tdat <- paste0(lubridate::week(point_data$t),".",lubridate::year(point_data$t))
-                                 tuniq <- paste0(lubridate::week(tuniq),".",lubridate::year(tuniq))
-                               }
-                               if(t_win=="month"){
-                                 tdat <- paste0(lubridate::month(point_data$t),".",lubridate::year(point_data$t))
-                                 tuniq <- paste0(lubridate::month(tuniq),".",lubridate::year(tuniq))
-                               }
+                               if(!t_win%in%c("day","week","month","year"))stop("t_win not day, week, month, or year")
+                               if(!date_format%in%c("dmy","myd","ymd","ydm","dym","mdy"))stop("date format not recognised")
+                               
+                               tvals <- do.call(eval(parse(text = paste0("lubridate::",date_format))),list(point_data$t))
+                               tuniq <- sort(tvals)
+                               tdat <- lubridate::floor_date(tvals, t_win, week_start = 1)
+                               tuniq <- lubridate::floor_date(tuniq, t_win, week_start = 1)
+                               tuniq <- unique(tuniq)
+                               difft <- c()
+                               for(i in 1:(length(tuniq)-1))difft <- c(difft, lubridate::interval(tuniq[i+1],tuniq[i])%/% months(1))
+                               if(verbose)message(paste("There are "),length(tuniq)," unique time periods in the data")
+                               if(laglength > length(tuniq))stop("laglength exceeds unique time periods")
+                               if(length(unique(difft))>1)message("Note that the data includes non-consecutive or differing length periods. The data will be extracted for the specified number of time periods, however the model will assume equal time differences.")
                                tuniq <- tuniq[(length(tuniq)-laglength+1):length(tuniq)]
+                               
                                for(i in 1:length(tuniq))
                                {
-                                 self$grid_data$y <-  lengths(sf::st_intersects(self$grid_data,
-                                                                           point_data[tdat==tuniq[i],]))
+                                 self$grid_data$y <-  lengths(sf::st_intersects(self$grid_data, point_data[tdat==tuniq[i],]))
                                  if(length(tuniq)>1)colnames(self$grid_data)[length(colnames(self$grid_data))] <- paste0("t",i)
                                  self$grid_data$d <- min(point_data[tdat==tuniq[i],]$t)
                                  colnames(self$grid_data)[length(colnames(self$grid_data))] <- paste0("date",i)
                                }
                              } else {
-                               self$grid_data$y <-  lengths(sf::st_intersects(self$grid_data,
-                                                                         point_data))
+                               self$grid_data$y <-  lengths(sf::st_intersects(self$grid_data,point_data))
                              }
                              if(verbose)message("added points data to grid data")
                            },
@@ -1890,7 +1895,9 @@ grid <- R6::R6Class("grid",
                                             L = 1.5,
                                             update = TRUE,
                                             formula_1 = NULL,
-                                            formula_2 = NULL){
+                                            formula_2 = NULL,
+                                            lower_bound = NULL,
+                                            upper_bound = NULL){
 
                         data <- private$prepare_data(m,
                                                      model,
@@ -1930,13 +1937,15 @@ grid <- R6::R6Class("grid",
                           if(length(covs_grid)>0 || !is.null(formula_2)){
                             if(!is.null(formula_2)){
                               if(!is(formula_2,"formula"))stop("Not a formula")
-                              f2 <- as.character(formula_2[[2]])
+                              f2 <- as.character(formula_2)[2]
                               f2 <- gsub(" ","",f2)
+                              if(!grepl("-1",f2))f2 <- paste0(f2,"-1")
                             } else {
-                              f2 <- "1"
-                              for(i in 1:length(covs)){
-                                f2 <- paste0(f2,"+",covs_grid[[i]])
+                              f2 <- ""
+                              for(i in 1:length(covs_grid)){
+                                f2 <- paste0(f2,ifelse(i==1,"","+"),covs_grid[i],"*b_",covs_grid[i])
                               }
+                              f2 <- paste0(f2,"-1")
                             }
                           } else {
                             f2 <- "1"
@@ -1945,10 +1954,10 @@ grid <- R6::R6Class("grid",
                           # add random effects structure
                           if(model=="exp"){
                             f1 <- paste0(f1,"+(1|fexp(X,Y))")
-                            if(length(covs_grid)>0)f2 <- paste0(f2,"+(1|fexp(X,Y))")
+                            if(length(covs_grid)>0|| !is.null(formula_2))f2 <- paste0(f2,"+(1|fexp(X,Y))")
                           } else if(model=="sqexp"){
                             f1 <- paste0(f1,"+(1|sqexp(X,Y))")
-                            if(length(covs_grid)>0)f2 <- paste0(f2,"+(1|sqexp(X,Y))")
+                            if(length(covs_grid)>0|| !is.null(formula_2))f2 <- paste0(f2,"+(1|sqexp(X,Y))")
                           } else {
                             stop("Only exp and spexp for now.")
                           }
@@ -1961,8 +1970,16 @@ grid <- R6::R6Class("grid",
                             private$cov_type <- 3
                           }
                           if(!is.null(self$region_data)){
-                            if(length(covs_grid) > 0){
+                            if(length(covs_grid) > 0 || !is.null(formula_2)){
                               private$lp_type <- 3
+                              if(length(covs_grid) > 0){
+                                griddat <- as.matrix(cbind(data$x_grid,as.data.frame(data$X_g)))
+                                griddatnames <- c(colnames(data$x_grid),colnames(data$X_g))
+                              } else {
+                                gridX <- as.data.frame(self$grid_data)[,-c(1:2)]
+                                griddat <- as.matrix(cbind(data$x_grid,gridX))
+                                griddatnames <- c(colnames(data$x_grid),colnames(self$grid_data)[-c(1:2)])
+                              }
                             } else {
                               private$lp_type <- 2
                             }
@@ -1972,8 +1989,21 @@ grid <- R6::R6Class("grid",
                           
                           # use random starting values with sensible intercept
                           P <- length(covs) + length(covs_grid)
+                          
                           beta <- c(mean(log(mean(data$y)) - log(data$popdens)))
-                          if(P>0)beta <- c(beta, rnorm(P,0,0.1))
+                          if(P>0 | !is.null(formula_2)){
+                            if(!is.null(lower_bound) | !is.null(upper_bound)){
+                              if(length(lower_bound) != length(upper_bound))stop("bounds not same length")
+                              beta_add <- rnorm(P,0,0.1)
+                              while(any(beta_add < lower_bound | beta_add > upper_bound)){
+                                idx_out <- which(beta_add < lower_bound | beta_add > upper_bound)
+                                beta_add[idx_out] <- rnorm(length(idx_out),0,0.1)
+                              }
+                            } else {
+                              beta <- c(beta, rnorm(P,0,0.1))
+                            }
+                          }
+                          
                           # set sensible starting value for theta 1
                           theta1 <- abs((log(max(data$y)) - beta[1])/2)/2
                           theta <- c(theta1,runif(1,0.1,0.5))
@@ -2062,12 +2092,26 @@ grid <- R6::R6Class("grid",
                                                               data$nT,
                                                               m)
                           } else if(private$cov_type == 3 & private$lp_type == 3){
+                            
+                            # out <<- list(f1,
+                            #              f2,
+                            #              as.matrix(data$X),
+                            #              griddat,
+                            #              c("intercept",covs),
+                            #              griddatnames,
+                            #              beta,
+                            #              theta,
+                            #              private$region_ptr,
+                            #              data$nT,
+                            #              m,
+                            #              data$L)
+                            
                             private$ptr <- Model_hsgp_region_grid__new(f1,
                                                                        f2,
                                                                        as.matrix(data$X),
-                                                                       as.matrix(data$x_grid),
+                                                                       griddat,
                                                                        c("intercept",covs),
-                                                                       colnames(data$x_grid),
+                                                                       griddatnames,
                                                                        beta,
                                                                        theta,
                                                                        private$region_ptr,
@@ -2238,7 +2282,7 @@ grid <- R6::R6Class("grid",
                             for(i in 1:nG){
                               nColV <- sum(grepl(covs_grid[i],colnames(self$grid_data)))
                               if(nColV==1){
-                                X_g[,i] <- rep(as.data.frame(self$grid_data)[,covs[i]],nT)
+                                X_g[,i] <- rep(as.data.frame(self$grid_data)[,covs_grid[i]],nT)
                               } else if(nColV==0){
                                 stop(paste0(covs_grid[i]," not found in grid data"))
                               } else {
@@ -2249,6 +2293,7 @@ grid <- R6::R6Class("grid",
                                 }
                               }
                             }
+                            colnames(X_g) <- covs_grid
                           } else {
                             nG <- 0
                             X_g <- matrix(0,nrow=nrow(self$grid_data)*nT,ncol=1)
@@ -2325,7 +2370,7 @@ grid <- R6::R6Class("grid",
                           datlist$n_cell <- ncell
                           datlist$cell_id <- private$intersection_data$grid_id
                           datlist$q_weights <- private$intersection_data$w
-                          if(length(covs_grid)>0)datlist$x_grid <- cbind(datlist$x_grid,as.data.frame(self$grid_data)[,covs_grid])
+                          #if(length(covs_grid)>0)datlist$x_grid <- cbind(datlist$x_grid,as.data.frame(self$grid_data)[,covs_grid])
                         } 
                         
                         if(bayes){
