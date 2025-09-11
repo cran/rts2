@@ -27,29 +27,31 @@ namespace model_rtsmcml_poisson_namespace {
 using stan::model::model_base_crtp;
 using namespace stan::math;
 stan::math::profile_map profiles__;
-static constexpr std::array<const char*, 22> locations_array__ =
+static constexpr std::array<const char*, 24> locations_array__ =
   {" (found before start of program)",
-  " (in 'string', line 12, column 2 to column 21)",
-  " (in 'string', line 15, column 2 to column 48)",
-  " (in 'string', line 18, column 2 to column 36)",
-  " (in 'string', line 19, column 2 to column 27)",
-  " (in 'string', line 2, column 2 to column 8)",
-  " (in 'string', line 3, column 2 to column 9)",
-  " (in 'string', line 4, column 2 to column 8)",
-  " (in 'string', line 5, column 9 to column 13)",
-  " (in 'string', line 5, column 2 to column 18)",
-  " (in 'string', line 6, column 9 to column 10)",
-  " (in 'string', line 6, column 11 to column 12)",
-  " (in 'string', line 6, column 2 to column 17)",
-  " (in 'string', line 7, column 8 to column 12)",
-  " (in 'string', line 7, column 2 to column 20)",
-  " (in 'string', line 8, column 2 to column 11)",
-  " (in 'string', line 9, column 9 to column 11)",
-  " (in 'string', line 9, column 12 to column 14)",
-  " (in 'string', line 9, column 2 to column 24)",
-  " (in 'string', line 12, column 9 to column 10)",
-  " (in 'string', line 12, column 11 to column 13)",
-  " (in 'string', line 15, column 9 to column 13)"};
+  " (in 'string', line 30, column 2 to column 21)",
+  " (in 'string', line 34, column 2 to column 48)",
+  " (in 'string', line 37, column 2 to column 34)",
+  " (in 'string', line 38, column 2 to column 43)",
+  " (in 'string', line 39, column 2 to column 27)",
+  " (in 'string', line 18, column 2 to column 8)",
+  " (in 'string', line 19, column 2 to column 9)",
+  " (in 'string', line 20, column 2 to column 8)",
+  " (in 'string', line 21, column 9 to column 13)",
+  " (in 'string', line 21, column 2 to column 18)",
+  " (in 'string', line 22, column 9 to column 10)",
+  " (in 'string', line 22, column 11 to column 12)",
+  " (in 'string', line 22, column 2 to column 17)",
+  " (in 'string', line 23, column 8 to column 12)",
+  " (in 'string', line 23, column 2 to column 20)",
+  " (in 'string', line 24, column 2 to column 11)",
+  " (in 'string', line 25, column 9 to column 11)",
+  " (in 'string', line 25, column 12 to column 14)",
+  " (in 'string', line 25, column 2 to column 24)",
+  " (in 'string', line 26, column 2 to column 19)",
+  " (in 'string', line 30, column 9 to column 10)",
+  " (in 'string', line 30, column 11 to column 13)",
+  " (in 'string', line 34, column 9 to column 13)"};
 #include <stan_meta_header.hpp>
 class model_rtsmcml_poisson final : public model_base_crtp<model_rtsmcml_poisson> {
 private:
@@ -61,6 +63,7 @@ private:
   std::vector<int> y;
   double rho;
   Eigen::Matrix<double,-1,-1> ar_chol_data__;
+  double constr_zero;
   int zu_1dim__;
   Eigen::Map<Eigen::Matrix<double,-1,1>> Xb{nullptr, 0};
   Eigen::Map<Eigen::Matrix<double,-1,-1>> ZL{nullptr, 0, 0};
@@ -86,27 +89,27 @@ public:
     try {
       int pos__ = std::numeric_limits<int>::min();
       pos__ = 1;
-      current_statement__ = 5;
+      current_statement__ = 6;
       context__.validate_dims("data initialization", "N", "int",
         std::vector<size_t>{});
       N = std::numeric_limits<int>::min();
-      current_statement__ = 5;
-      N = context__.vals_i("N")[(1 - 1)];
       current_statement__ = 6;
+      N = context__.vals_i("N")[(1 - 1)];
+      current_statement__ = 7;
       context__.validate_dims("data initialization", "nT", "int",
         std::vector<size_t>{});
       nT = std::numeric_limits<int>::min();
-      current_statement__ = 6;
-      nT = context__.vals_i("nT")[(1 - 1)];
       current_statement__ = 7;
+      nT = context__.vals_i("nT")[(1 - 1)];
+      current_statement__ = 8;
       context__.validate_dims("data initialization", "Q", "int",
         std::vector<size_t>{});
       Q = std::numeric_limits<int>::min();
-      current_statement__ = 7;
-      Q = context__.vals_i("Q")[(1 - 1)];
       current_statement__ = 8;
-      stan::math::validate_non_negative_index("Xb", "N * nT", (N * nT));
+      Q = context__.vals_i("Q")[(1 - 1)];
       current_statement__ = 9;
+      stan::math::validate_non_negative_index("Xb", "N * nT", (N * nT));
+      current_statement__ = 10;
       context__.validate_dims("data initialization", "Xb", "double",
         std::vector<size_t>{static_cast<size_t>((N * nT))});
       Xb_data__ = Eigen::Matrix<double,-1,1>::Constant((N * nT),
@@ -115,24 +118,24 @@ public:
         nT));
       {
         std::vector<local_scalar_t__> Xb_flat__;
-        current_statement__ = 9;
+        current_statement__ = 10;
         Xb_flat__ = context__.vals_r("Xb");
-        current_statement__ = 9;
+        current_statement__ = 10;
         pos__ = 1;
-        current_statement__ = 9;
+        current_statement__ = 10;
         for (int sym1__ = 1; sym1__ <= (N * nT); ++sym1__) {
-          current_statement__ = 9;
+          current_statement__ = 10;
           stan::model::assign(Xb, Xb_flat__[(pos__ - 1)],
             "assigning variable Xb", stan::model::index_uni(sym1__));
-          current_statement__ = 9;
+          current_statement__ = 10;
           pos__ = (pos__ + 1);
         }
       }
-      current_statement__ = 10;
-      stan::math::validate_non_negative_index("ZL", "N", N);
       current_statement__ = 11;
-      stan::math::validate_non_negative_index("ZL", "Q", Q);
+      stan::math::validate_non_negative_index("ZL", "N", N);
       current_statement__ = 12;
+      stan::math::validate_non_negative_index("ZL", "Q", Q);
+      current_statement__ = 13;
       context__.validate_dims("data initialization", "ZL", "double",
         std::vector<size_t>{static_cast<size_t>(N), static_cast<size_t>(Q)});
       ZL_data__ = Eigen::Matrix<double,-1,-1>::Constant(N, Q,
@@ -141,42 +144,42 @@ public:
         Q);
       {
         std::vector<local_scalar_t__> ZL_flat__;
-        current_statement__ = 12;
+        current_statement__ = 13;
         ZL_flat__ = context__.vals_r("ZL");
-        current_statement__ = 12;
+        current_statement__ = 13;
         pos__ = 1;
-        current_statement__ = 12;
+        current_statement__ = 13;
         for (int sym1__ = 1; sym1__ <= Q; ++sym1__) {
-          current_statement__ = 12;
+          current_statement__ = 13;
           for (int sym2__ = 1; sym2__ <= N; ++sym2__) {
-            current_statement__ = 12;
+            current_statement__ = 13;
             stan::model::assign(ZL, ZL_flat__[(pos__ - 1)],
               "assigning variable ZL", stan::model::index_uni(sym2__),
               stan::model::index_uni(sym1__));
-            current_statement__ = 12;
+            current_statement__ = 13;
             pos__ = (pos__ + 1);
           }
         }
       }
-      current_statement__ = 13;
-      stan::math::validate_non_negative_index("y", "N * nT", (N * nT));
       current_statement__ = 14;
+      stan::math::validate_non_negative_index("y", "N * nT", (N * nT));
+      current_statement__ = 15;
       context__.validate_dims("data initialization", "y", "int",
         std::vector<size_t>{static_cast<size_t>((N * nT))});
       y = std::vector<int>((N * nT), std::numeric_limits<int>::min());
-      current_statement__ = 14;
-      y = context__.vals_i("y");
       current_statement__ = 15;
+      y = context__.vals_i("y");
+      current_statement__ = 16;
       context__.validate_dims("data initialization", "rho", "double",
         std::vector<size_t>{});
       rho = std::numeric_limits<double>::quiet_NaN();
-      current_statement__ = 15;
-      rho = context__.vals_r("rho")[(1 - 1)];
       current_statement__ = 16;
-      stan::math::validate_non_negative_index("ar_chol", "nT", nT);
+      rho = context__.vals_r("rho")[(1 - 1)];
       current_statement__ = 17;
       stan::math::validate_non_negative_index("ar_chol", "nT", nT);
       current_statement__ = 18;
+      stan::math::validate_non_negative_index("ar_chol", "nT", nT);
+      current_statement__ = 19;
       context__.validate_dims("data initialization", "ar_chol", "double",
         std::vector<size_t>{static_cast<size_t>(nT), static_cast<size_t>(nT)});
       ar_chol_data__ = Eigen::Matrix<double,-1,-1>::Constant(nT, nT,
@@ -186,32 +189,38 @@ public:
         nT);
       {
         std::vector<local_scalar_t__> ar_chol_flat__;
-        current_statement__ = 18;
+        current_statement__ = 19;
         ar_chol_flat__ = context__.vals_r("ar_chol");
-        current_statement__ = 18;
+        current_statement__ = 19;
         pos__ = 1;
-        current_statement__ = 18;
+        current_statement__ = 19;
         for (int sym1__ = 1; sym1__ <= nT; ++sym1__) {
-          current_statement__ = 18;
+          current_statement__ = 19;
           for (int sym2__ = 1; sym2__ <= nT; ++sym2__) {
-            current_statement__ = 18;
+            current_statement__ = 19;
             stan::model::assign(ar_chol, ar_chol_flat__[(pos__ - 1)],
               "assigning variable ar_chol", stan::model::index_uni(sym2__),
               stan::model::index_uni(sym1__));
-            current_statement__ = 18;
+            current_statement__ = 19;
             pos__ = (pos__ + 1);
           }
         }
       }
-      current_statement__ = 19;
-      stan::math::validate_non_negative_index("gamma", "Q", Q);
       current_statement__ = 20;
+      context__.validate_dims("data initialization", "constr_zero", "double",
+        std::vector<size_t>{});
+      constr_zero = std::numeric_limits<double>::quiet_NaN();
+      current_statement__ = 20;
+      constr_zero = context__.vals_r("constr_zero")[(1 - 1)];
+      current_statement__ = 21;
+      stan::math::validate_non_negative_index("gamma", "Q", Q);
+      current_statement__ = 22;
       stan::math::validate_non_negative_index("gamma", "nT", nT);
-      current_statement__ = 21;
+      current_statement__ = 23;
       zu_1dim__ = std::numeric_limits<int>::min();
-      current_statement__ = 21;
+      current_statement__ = 23;
       zu_1dim__ = (N * nT);
-      current_statement__ = 21;
+      current_statement__ = 23;
       stan::math::validate_non_negative_index("zu", "N * nT", zu_1dim__);
     } catch (const std::exception& e) {
       stan::lang::rethrow_located(e, locations_array__[current_statement__]);
@@ -261,8 +270,11 @@ public:
       {
         current_statement__ = 3;
         lp_accum__.add(stan::math::std_normal_lpdf<propto__>(
-                         stan::math::to_array_1d(gamma)));
+                         stan::math::to_vector(gamma)));
         current_statement__ = 4;
+        lp_accum__.add(stan::math::normal_lpdf<propto__>(
+                         stan::math::sum(gamma), 0, ((constr_zero * Q) * nT)));
+        current_statement__ = 5;
         lp_accum__.add(stan::math::poisson_log_lpmf<propto__>(y,
                          stan::math::add(Xb, zu)));
       }

@@ -105,6 +105,7 @@ grid <- R6::R6Class("grid",
                                rID <- poly$region_id
                                tmp$area <- as.numeric(sf::st_area(tmp))
                                a1 <-rep(aggregate(tmp$area,list(tmp$region_id),sum)$x,unname(table(tmp$region_id)))
+                               #cellsize <- sf::st_area(self$grid_data[1,])
                                tmp$w <- tmp$area/a1
                                self$region_data <- poly
                                private$intersection_data <- tmp
@@ -511,11 +512,11 @@ grid <- R6::R6Class("grid",
                            #' **BAYESIAN MODEL FITTING**
                            #' 
                            #' The grid data must contain columns `t*`, giving the case
-                           #' count in each time period (see `points_to_grid`), as well as any covariates to include in the model
-                           #' (see `add_covariates`) and the population density. Otherwise, if the data are regional data, then the outcome
+                           #' count in each time period (see `points_to_grid`), or a column `y` in single time period cases, as well as any covariates to include in the model
+                           #' (see `add_covariates`). If the population density is not provided it is set to one. If the data are regional data, then the outcome
                            #' counts must be in self$region_data
                            #'
-                           #' Our statistical model is a Log Gaussian cox process,
+                           #' The statistical model is a Log Gaussian cox process,
                            #' whose realisation is observed on the Cartesian area of interest
                            #' A and time period T. The resulting data are relaisations of an inhomogeneous
                            #' Poisson process with stochastic intensity function \eqn{\{\lambda{s,t}:s\in A, t \in T\}}.
@@ -818,23 +819,28 @@ grid <- R6::R6Class("grid",
                            #' @details
                            #' **MAXIMUM LIKELIHOOD MODEL FITTING**
                            #' 
-                           #' The grid data must contain columns `t*`, giving the case
-                           #' count in each time period (see `points_to_grid`), as well as any covariates to include in the model
-                           #' (see `add_covariates`) and the population density. Otherwise, if the data are regional data, then the outcome
-                           #' counts must be in self$region_data. See `lgcp_bayes()` for more details on the model.
+                           #' The grid or region data must contain columns `t*`, giving the case
+                           #' count in each time period (see `points_to_grid`), or `y` if single time period, as well as any covariates to include in the model
+                           #' (see `add_covariates`). If a population density variable is not provided it is set to one. If the data are regional data then the outcome
+                           #' counts must be in self$region_data. See `lgcp_bayes()` for Bayesian approaches to model fitting and more details on the model.
                            #' 
                            #' The argument `approx` specifies whether to use a full LGCP model (`approx='none'`) or whether
-                           #' to use either a nearest neighbour approximation (`approx='nngp'`) 
+                           #' to use either a nearest neighbour approximation (`approx='nngp'`, or `approx='hsgp'`) 
                            #' 
                            #' Model fitting uses one of several stochastic maximum likelihood algorithms, which have three steps:
-                           #'  1. Sample random effects using MCMC. Using cmdstanr is recommended as it is much faster. The arguments 
-                           #'    `mcmc_warmup` and `mcmc_sampling` specify the warmup and sampling iterations for this step.
+                           #'  1. Sample random effects using MCMC. The arguments 
+                           #'    `mcmc_warmup` and `mcmc_sampling` specify the warmup and sampling iterations for this step. If the algorithm 
+                           #'    is SAEM (the default), then the samples contribute to all subsequent iterations but with decaying effect given 
+                           #'    by alpha. SAEM is often faster than MCEM but may have high Monte Carlo error. 
                            #'  2. Fit fixed effect parameters using expectation maximisation.
-                           #'  3. Fit covariance parameters using expectation maximisation. This third step is the slowest. The NNGP approximation
-                           #'     provides some speed improvements. Otherwise this step can be skipped if the covaraince parameters are "known".   
+                           #'  3. Fit covariance parameters using expectation maximisation. The NNGP and HSGP approximations
+                           #'     provide significant speed improvements at the expense of some approximation error, which diminishes with larger values of `m`. 
+                           #'     This step can be skipped if the covaraince parameters are "known" and provided.   
+                           #'     
                            #'  The argument `algo` specifies the algorithm, the user can select either MCMC maximum likelihood or stochastic approximation 
-                           #'  expectation maximisation with or without Ruppert-Polyak averaging. MCMC-ML can be used with or without adaptive MCMC sample sizes
-                           #'  and either a derivative free or quasi-Newton optimiser (depending on the underlying model).
+                           #'  expectation maximisation. MCMC-ML can be used with or without adaptive MCMC sample sizes
+                           #'  and either a derivative free or quasi-Newton optimiser (depending on the underlying model). The defaults are chosen
+                           #'  based on average efficiency and reliability, but may not be the best choice in every case.
                            #' 
                            #' @param popdens character string. Name of the population density column
                            #' @param covs vector of strings. Base names of the covariates to
@@ -876,6 +882,7 @@ grid <- R6::R6Class("grid",
                            #' 2 = No improvement in the log-likelihood for beta with probability 0.95, 3 = Difference between model parameters is less than `tol` between iterations.
                            #' @param iter_warmup integer. Number of warmup iterations
                            #' @param iter_sampling integer. Number of sampling iterations
+                           #' @param constr_zero Scalar. In the MCMC sampling step, the mean of the random effects is constrained to have variance of this value.
                            #' @param trace Integer. Level of detail of information printed to the console. 0 = none, 1 = some (default), 2 = most.
                            #' @param use_cmdstanr logical. Defaults to false. If true then cmdstanr will be used
                            #' instead of rstan.
@@ -933,6 +940,7 @@ grid <- R6::R6Class("grid",
                                               max.iter = 30,
                                               iter_warmup=100,
                                               iter_sampling=250,
+                                              constr_zero = 0.001,
                                               trace = 1,
                                               use_cmdstanr = FALSE){
                              # some checks at the beginning
@@ -940,7 +948,7 @@ grid <- R6::R6Class("grid",
                              if(m<=1 & approx == 'nngp')stop("m must be greater than one")
                              if(m >25 & trace >= 1)message("m is large, sampling may take a long time.")
                              if(!is.null(self$region_data)& trace >= 1)message("Using regional data model.")
-                             if(! algo %in% 1:8)stop("Algo must be in 1 - 5")
+                             if(! algo %in% 1:8)stop("Algo must be in 1 - 8")
                              if(! conv_criterion %in% c(1,2,3))stop("conv_criterion must be 1, 2, or 3")
                              if(algo %in% c(4,5) & (alpha < 0.5 | alpha >= 1))stop("alpha must be in [0,1) for SAEM")
                              if(is.null(popdens)){
@@ -965,7 +973,7 @@ grid <- R6::R6Class("grid",
                              }
                              rtsModel__set_trace(private$ptr,trace,private$cov_type,private$lp_type)
                              n_mcmc_sampling <- ifelse(adaptive, 20, iter_sampling)
-                             rtsModel__saem(private$ptr, algo %in% 4:5, n_mcmc_sampling, alpha, algo==5, private$cov_type, private$lp_type)
+                             
                              ## deal with starting values and initialise parameters
                              if(!is.null(starting_values)){
                                if("gamma"%in%names(starting_values)){
@@ -1000,6 +1008,7 @@ grid <- R6::R6Class("grid",
                              rtsModel__update_u(private$ptr,matrix(0,nrow = ifelse(approx=="hsgp", m * m, datlist$Nsample),ncol=1),FALSE,private$cov_type,private$lp_type)
                              if(trace >= 1)cat("\nIter: 0\n")
                              rtsModel__ml_beta(private$ptr,0,private$cov_type,private$lp_type)
+                             rtsModel__saem(private$ptr, algo %in% 4:5, n_mcmc_sampling, alpha, algo==5, private$cov_type, private$lp_type)
                              # initialise the parameters and data on the R side
                              beta <- rtsModel__get_beta(private$ptr,private$cov_type,private$lp_type)
                              theta <- rtsModel__get_theta(private$ptr,private$cov_type,private$lp_type)
@@ -1023,7 +1032,8 @@ grid <- R6::R6Class("grid",
                                ZL = as.matrix(L),
                                y = datlist$y,
                                rho = rho,
-                               ar_chol = ar_chol
+                               ar_chol = ar_chol,
+                               constr_zero = constr_zero
                              )
                              ## set up the stan model
                              if(!is.null(self$region_data)){
@@ -1157,7 +1167,7 @@ grid <- R6::R6Class("grid",
                                }
                                llvals <- rtsModel__get_log_likelihood_values(private$ptr,private$cov_type,private$lp_type)
                                if(conv_criterion == 3){
-                                 converged <- !(beta_diff > tol & theta_diff > tol)
+                                 converged <- (max(abs(beta - beta_new)) <= tol & max(abs(theta - theta_new)) <= tol)
                                } 
                                if(iter > 1){
                                  udiagnostic <- rtsModel__u_diagnostic(private$ptr,private$cov_type,private$lp_type)
@@ -1165,7 +1175,8 @@ grid <- R6::R6Class("grid",
                                  llvar <- rtsModel__ll_diff_variance(private$ptr, TRUE, conv_criterion==1, private$cov_type,private$lp_type)
                                  if(adaptive) n_mcmc_sampling <- max(n_mcmc_sampling, min(iter_sampling, ceiling(llvar * 6.182557)/uval^2)) # (qnorm(0.95) + qnorm(0.8))^2
                                  if(conv_criterion %in% c(1,2)){
-                                   conv.criterion.value <- uval + qnorm(0.95)*sqrt(llvar/n_mcmc_sampling)
+                                   nmult <- ifelse(algo %in% 4:6, iter^alpha)
+                                   conv.criterion.value <- uval + qnorm(0.95)*sqrt(llvar/(n_mcmc_sampling*nmult))
                                    converged <- conv.criterion.value < 0
                                  } 
                                }
@@ -1190,7 +1201,7 @@ grid <- R6::R6Class("grid",
                                    if(adaptive)cat("\nMCMC sample size (adaptive): ",n_mcmc_sampling)
                                    cat("\nLog-lik diff values: ", round(udiagnostic$first,5),", ", round(udiagnostic$second,5)," overall: ", round(Reduce(sum,udiagnostic), 5))
                                    cat("\nLog-lik variance: ", round(llvar,5))
-                                   if(conv_criterion %in% 1:2)cat(" convergence criterion:", round(conv.criterion.value,5))
+                                   if(conv_criterion %in% 1:2)cat(" convergence criterion (converges @ <0):", round(conv.criterion.value,5))
                                  }
                                  cat("\n",Reduce(paste0,rep("-",40)))
                                }
@@ -1237,7 +1248,6 @@ grid <- R6::R6Class("grid",
                              margR2 <- var(Matrix::drop(xb))/total_var
                              
                              # now get predictions
-                             ## TO DO: allow for variance in beta
                              X <- rtsModel__X(private$ptr,private$cov_type,private$lp_type)
                              popd <- private$stack_variable(popdens)
                              Gpp <- matrix(0,nrow = nrow(X),ncol=ncol(X))
@@ -1296,6 +1306,11 @@ grid <- R6::R6Class("grid",
                                          se_pred = list(pp = sqrt(SEpp), tot = sqrt(SEtot)),
                                          nT = datlist$nT,
                                          conv_criterion = conv_criterion)
+                             if(algo %in% 4:5){
+                               out <- append(out, list(re.samps = u[,(ncol(u) - 2*iter_sampling + 1):ncol(u)]))
+                             } else {
+                               out <- append(out, list(re.samps = u))
+                             }
                              class(out) <- "rtsFit"
                              private$last_model_fit <- out
                              return(invisible(out))
@@ -1558,7 +1573,7 @@ grid <- R6::R6Class("grid",
                            #' @param zcols vector of character strings. Names of the variables in `grid_data` to
                            #' map to the new geography
                            #' @param weight_type character string, either "area" or "pop" for area-weighted
-                           #' or population weighted averaging, respectively
+                           #' or population weighted averaging, respectively, or "sum" to take the weighted sum.
                            #' @param popdens character string. If `weight_type` is equal to "pop" then the
                            #' name of the column in `grid_data` with population density data
                            #' @param verbose logical. Whether to provide progress bar.
@@ -1594,42 +1609,65 @@ grid <- R6::R6Class("grid",
                                                        weight_type="area",
                                                        popdens=NULL,
                                                        verbose=TRUE){
-
+                             if(!weight_type %in% c("area","pop","sum"))stop("weight_type must be area, pop, or sum")
                              if(sf::st_crs(self$grid_data)!=sf::st_crs(new_geom)){
                                sf::st_crs(self$grid_data) <- sf::st_crs(new_geom)
                                warning("st_crs(self$grid_data)!=st_crs(new_geom) setting equal")
                              }
-
-                             tmp <- sf::st_intersection(self$grid_data[,zcols],new_geom)
-                             tmp_len <- lengths(sf::st_intersects(new_geom,self$grid_data))
-                             tmp_len <- 1 - tmp_len[1] + cumsum(tmp_len)
-                             vals <- matrix(nrow=nrow(new_geom),
-                                            ncol=length(zcols))
-
+                             
+                             
+                             # tmp <- sf::st_intersection(new_geom,self$grid_data[,zcols])
+                             # tmp_len <- lengths(sf::st_intersects(new_geom,self$grid_data))
+                             # tmp_len <- 1 - tmp_len[1] + cumsum(tmp_len)
+                             vals <- matrix(nrow=nrow(new_geom),ncol=length(zcols))
                              if(verbose)cat("Overlaying geographies\n")
-
+                             grid_area <- as.numeric(sf::st_area(self$grid_data[1,]))
+                             # tmp <- sf::st_intersection(new_geom,self$grid_data[,c(popdens,zcols)])
+                             # tmp_len <- lengths(sf::st_intersects(new_geom,self$grid_data))
+                             # tmp_len <- 1 - tmp_len[1] + cumsum(tmp_len)
+                             # 
+                             # for(i in 1:nrow(new_geom)){
+                             #   if(i < nrow(new_geom)){
+                             #     idx_range <- tmp_len[i]:(tmp_len[i+1]-1)
+                             #   } else {
+                             #     idx_range <- tmp_len[i]:nrow(tmp)
+                             #   }
+                             #   tmp_range <- tmp[idx_range,]
+                             #   
+                             #   w <- as.numeric(sf::st_area(tmp_range))/grid_area
+                             #   for(j in 1:length(zcols)){
+                             #     if(weight_type == "sum"){
+                             #       vals[i,j] <- sum(as.data.frame(tmp_range)[,zcols[j]]*w)
+                             #     } else if(weight_type == "area"){
+                             #       vals[i,j] <- weighted.mean(as.data.frame(tmp_range)[,zcols[j]],w =w)
+                             #     } else {
+                             #       w <- w*as.data.frame(tmp_range)[,popdens]
+                             #       vals[i,j] <- weighted.mean(as.data.frame(tmp_range)[,zcols[j]],w =w)
+                             #     }
+                             #   }
+                             #   if(verbose)cat("\r",progress_bar(i,nrow(new_geom)))
+                             # }
+                             tmp <- suppressWarnings(sf::st_intersection(new_geom,self$grid_data[,c(popdens,zcols)]))
+                             rnames <- rownames(tmp)
+                             rnames <- gsub("\\..*","",rnames)
+                             gnames <- rownames(new_geom)
+                             
                              for(i in 1:nrow(new_geom)){
-                               if(i < nrow(new_geom)){
-                                 idx_range <- tmp_len[i]:(tmp_len[i+1]-1)
-                               } else {
-                                 idx_range <- tmp_len[i]:nrow(tmp)
-                               }
-
-                               tmp_range <- tmp[idx_range,]
-                               w <- as.numeric(sf::st_area(tmp_range))
-
-                               if(weight_type=="pop"){
-                                 w <- w*as.data.frame(tmp_range)[,popdens]
-                               }
-
+                               tmp_range <- tmp[which(rnames == gnames[i]),]
+                               w <- as.numeric(sf::st_area(tmp_range))/grid_area
                                for(j in 1:length(zcols)){
-                                 vals[i,j] <- weighted.mean(as.data.frame(tmp_range)[,zcols[j]],
-                                                            w=w)
+                                 if(weight_type == "sum"){
+                                   vals[i,j] <- sum(as.data.frame(tmp_range)[,zcols[j]][w > 0.5])
+                                 } else if(weight_type == "area"){
+                                   vals[i,j] <- weighted.mean(as.data.frame(tmp_range)[,zcols[j]],w =w)
+                                 } else {
+                                   w <- w*as.data.frame(tmp_range)[,popdens]
+                                   vals[i,j] <- weighted.mean(as.data.frame(tmp_range)[,zcols[j]],w =w)
+                                 }
                                }
-
                                if(verbose)cat("\r",progress_bar(i,nrow(new_geom)))
                              }
-
+                             
                              for(j in 1:length(zcols)){
                                new_geom$x <- vals[,j]
                                colnames(new_geom)[length(colnames(new_geom))] <- zcols[j]
@@ -1988,7 +2026,7 @@ grid <- R6::R6Class("grid",
                           }
                           
                           # use random starting values with sensible intercept
-                          P <- length(covs) + length(covs_grid)
+                          P <- length(covs) + length(covs_grid) #+ ifelse(length(covs_grid) > 0, 1, 0)
                           
                           beta <- c(mean(log(mean(data$y)) - log(data$popdens)))
                           if(P>0 | !is.null(formula_2)){
@@ -2067,13 +2105,12 @@ grid <- R6::R6Class("grid",
                                                                   private$region_ptr,
                                                                   data$L)
                           } else if(private$cov_type == 1 & private$lp_type == 3){
-
                             private$ptr <- Model_ar_region_grid__new(f1,
                                                                 f2,
                                                                 as.matrix(data$X),
-                                                                as.matrix(data$x_grid),
+                                                                griddat,
                                                                 c("intercept",covs),
-                                                                colnames(data$x_grid),
+                                                                griddatnames,
                                                                 beta,
                                                                 theta,
                                                                 private$region_ptr,
@@ -2082,9 +2119,9 @@ grid <- R6::R6Class("grid",
                             private$ptr <- Model_nngp_region_grid__new(f1,
                                                               f2,
                                                               as.matrix(data$X),
-                                                              as.matrix(data$x_grid),
+                                                              griddat,
                                                               c("intercept",covs),
-                                                              colnames(data$x_grid),
+                                                              griddatnames,
                                                               beta,
                                                               theta,
                                                               private$region_ptr,
@@ -2092,20 +2129,6 @@ grid <- R6::R6Class("grid",
                                                               data$nT,
                                                               m)
                           } else if(private$cov_type == 3 & private$lp_type == 3){
-                            
-                            # out <<- list(f1,
-                            #              f2,
-                            #              as.matrix(data$X),
-                            #              griddat,
-                            #              c("intercept",covs),
-                            #              griddatnames,
-                            #              beta,
-                            #              theta,
-                            #              private$region_ptr,
-                            #              data$nT,
-                            #              m,
-                            #              data$L)
-                            
                             private$ptr <- Model_hsgp_region_grid__new(f1,
                                                                        f2,
                                                                        as.matrix(data$X),
@@ -2189,6 +2212,8 @@ grid <- R6::R6Class("grid",
                             } else {
                               stop("case counts not defined in data")
                             }
+                          } else {
+                            if("y"%in%colnames(self$grid_data))stop("both t and y case count variables found")
                           }
                         } else {
                           nT <- sum(grepl("\\bt[0-9]",colnames(self$region_data)))
@@ -2198,6 +2223,8 @@ grid <- R6::R6Class("grid",
                             } else {
                               stop("case counts not defined in data")
                             }
+                          }  else {
+                            if("y"%in%colnames(self$grid_data))stop("both t and y case count variables found")
                           }
                         }
                         nCell <- nrow(self$grid_data)
@@ -2299,6 +2326,7 @@ grid <- R6::R6Class("grid",
                             X_g <- matrix(0,nrow=nrow(self$grid_data)*nT,ncol=1)
                           }
                         }
+                        
                         if(bayes){
                           if(!is.null(self$priors)){
                             if(length(self$priors$prior_linpred_mean)!=Q|length(self$priors$prior_linpred_sd)!=Q)
