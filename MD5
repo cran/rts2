@@ -1,4 +1,4 @@
-faa9a0e33b20c65a5e15aed4188296ec *DESCRIPTION
+ab5dc020e6b7922dd47a6180516688b5 *DESCRIPTION
 cb625648df69445907ec4bccba29017a *NAMESPACE
 e65ca8c3c6295c5a5d78005cd776c2cb *R/RcppExports.R
 74581c67ef9a784ff1d2327a39454f8d *R/data_functions.R
@@ -8,7 +8,7 @@ bf85314ef6799d36ebd266d8a1572d27 *R/griddata_class.R
 69aefd5e011eaebdb8feb782fe272e8a *R/rts2-package.R
 88074cc2f38d5edbb2c7d478ab35133b *R/stanmodels.R
 da0e957aa30c2e15f214549412afccfa *README.md
-b0a7bda8c1231c096f6790eda50edf8b *build/partial.rdb
+1812cfea8f3188948fa5065d7981ea14 *build/partial.rdb
 7e297a31e37e77c201a2bacff2f979eb *configure
 c2797e661454992db32ddc9e6a0bd541 *configure.win
 87d037c7e11daa688a83e650aad05624 *data/birmingham_crime.rda

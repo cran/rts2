@@ -1,7 +1,7 @@
 Package: rts2
 Title: Real-Time Disease Surveillance
-Version: 0.10.1
-Date: 2026-01-20
+Version: 0.10.2
+Date: 2026-02-02
 Authors@R: 
     person(given = "Sam",
            family = "Watson",
@@ -30,8 +30,8 @@ LinkingTo: BH (>= 1.66.0), Rcpp (>= 0.12.0), RcppEigen (>= 0.3.3.3.0),
         2.32.0), glmmrBase (>= 1.1.0), SparseChol (>= 0.3.2)
 SystemRequirements: GNU make
 NeedsCompilation: yes
-Packaged: 2026-01-20 15:12:17 UTC; WatsonSI
+Packaged: 2026-02-02 12:28:21 UTC; watsonsi
 Author: Sam Watson [aut, cre] (ORCID: <https://orcid.org/0000-0002-8972-769X>)
 Maintainer: Sam Watson <s.i.watson@bham.ac.uk>
 Repository: CRAN
-Date/Publication: 2026-01-20 20:00:02 UTC
+Date/Publication: 2026-02-02 14:10:02 UTC
