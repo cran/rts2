@@ -151,8 +151,7 @@ counts must be in self$region_data. See \code{lgcp_bayes()} for Bayesian approac
 
 Model fitting uses a fast stochastic maximum likelihood algorithms, which have three steps:
 \enumerate{
-\item Sample random effects using MCMC. The argument
-\code{mcmc_sampling} specifies the iterations for this step.
+\item Sample random effects. The argument \code{iter_sampling} specifies the iterations for this step.
 \item Fit fixed effect parameters using a Newton-Raphson step.
 \item Fit covariance parameters using a Newton-Raphson step.
 }
@@ -318,29 +317,19 @@ g2$hotspots(threshold = 2, stat = "rr")
 ## Method `grid$lgcp_ml`
 ## ------------------------------------------------
 
-# note: these examples are spatial only in 0.10.0 to prevent an error 
-# with the reverse dependency check when updating the base package.
-# If you're seeing this note, then an updated package will be available
-# imminently.
-# a simple example with completely random points
-b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
-g1 <- grid$new(b1,0.5)
-dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3))
-dp <- create_points(dp,pos_vars = c('y','x'))
-cov1 <- grid$new(b1,0.8)
-cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-g1$add_covariates(cov1$grid_data,
-                  zcols="cov")
-g1$points_to_grid(dp)
-
-# an example 
-
+# a simple example with simulated points using SPDE approximation
+boundary <- st_set_crs(boundary, 4326)
+g1 <- grid$new(boundary,cellsize=0.01)
+g1$points_to_grid(point_data = create_points(example_points,
+                                             pos_vars = c("Y","X")))
 \donttest{
-g1$lgcp_ml(popdens="cov",iter_sampling = 50)
-g1$model_fit()
-g1$extract_preds("rr")
+msoa <- sf::st_transform(birmingham_crime,crs = 4326)
+g1$add_covariates(msoa,zcols="pop",weight_type="area")
+set.seed(2345)
+fit_spde <- g1$lgcp_ml("pop", model = "hsgp_matern1")
+g1$extract_preds(type = c("rr"), popdens = "pop")
 g1$plot("rr")
-g1$hotspots(threshold = 2, stat = "rr")
+
 
 # this example uses real aggregated spatial data
 # note that the full dataset has 12 time periods
@@ -351,13 +340,18 @@ g1$hotspots(threshold = 2, stat = "rr")
  example_data$y <- birmingham_crime$t12 # spatial
  example_data <- sf::st_transform(example_data, crs = 4326)
  g2 <- grid$new(example_data,cellsize=0.006)
- g2$lgcp_ml(popdens = "pop", start_theta = log(c(0.1, 0.05)))
- g2$model_fit()
+ set.seed(123)
+ g2$lgcp_ml(popdens = "pop", model = "hsgp_matern1", L = 1.5, m = c(15,15))
  g2$extract_preds("rr")
  g2$plot("rr")
- g2$hotspots(threshold = 2, stat = "rr") 
+ 
+ #SPDE verison rescale to more stable coordinates
+g2$transform(scale_factor = 50)
+set.seed(101)
+fitt <- suppressWarnings(g2$lgcp_ml("pop", model = "spde_matern1")) # use default mesh args
+g2$extract_preds("rr")
+g2$plot("rr")
 }
-
 
 ## ------------------------------------------------
 ## Method `grid$extract_preds`
@@ -431,16 +425,13 @@ points_to_grid, add_covariates
 \describe{
 \item{\code{grid_data}}{sf object specifying the computational grid for the analysis}
 
+\item{\code{point_data}}{sf object with the event locations}
+
 \item{\code{region_data}}{sf object specifying an irregular lattice, such as census areas,
 within which case counts are aggregated. Only used if polygon data are provided on
 class initialisation.}
 
 \item{\code{priors}}{list of prior distributions for the analysis}
-
-\item{\code{bobyqa_control}}{list of control parameters for the BOBYQA algorithm, must contain named
-elements any or all of \code{npt}, \code{rhobeg}, \code{rhoend}, \code{covrhobeg}, \code{covrhoend}.
-Only has an effect for the HSGP and NNGP approximations. The latter two parameters control the
-covariance parameter optimisation, while the former control the linear predictor.}
 
 \item{\code{boundary}}{sf object showing the boundary of the area of interest}
 }
@@ -451,6 +442,7 @@ covariance parameter optimisation, while the former control the linear predictor
 \itemize{
 \item \href{#method-grid-new}{\code{grid$new()}}
 \item \href{#method-grid-print}{\code{grid$print()}}
+\item \href{#method-grid-transform}{\code{grid$transform()}}
 \item \href{#method-grid-plot}{\code{grid$plot()}}
 \item \href{#method-grid-points_to_grid}{\code{grid$points_to_grid()}}
 \item \href{#method-grid-model_data_frame}{\code{grid$model_data_frame()}}
@@ -463,6 +455,7 @@ covariance parameter optimisation, while the former control the linear predictor
 \item \href{#method-grid-hotspots}{\code{grid$hotspots()}}
 \item \href{#method-grid-aggregate_output}{\code{grid$aggregate_output()}}
 \item \href{#method-grid-scale_conversion_factor}{\code{grid$scale_conversion_factor()}}
+\item \href{#method-grid-build_spde_data}{\code{grid$build_spde_data()}}
 \item \href{#method-grid-get_region_data}{\code{grid$get_region_data()}}
 \item \href{#method-grid-variogram}{\code{grid$variogram()}}
 \item \href{#method-grid-reorder}{\code{grid$reorder()}}
@@ -478,7 +471,8 @@ covariance parameter optimisation, while the former control the linear predictor
 \subsection{Method \code{new()}}{
 Create a new grid object
 
-Produces a regular grid over an area of interest as an sf object, see details for information on initialisation.
+Produces a regular grid over an area of interest as an sf object, see details for information on initialisation. If the model is
+fit using maximum likelihood with SPDE approximation the grid is only used for prediction and interpolation of covariates.
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{grid$new(poly, cellsize, verbose = TRUE)}\if{html}{\out{</div>}}
 }
@@ -525,6 +519,28 @@ Prints this object
 
 \subsection{Returns}{
 None. called for effects.
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-grid-transform"></a>}}
+\if{latex}{\out{\hypertarget{method-grid-transform}{}}}
+\subsection{Method \code{transform()}}{
+Reproject coordinates of spatial data in the object to a new CRS
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{grid$transform(crs, scale_factor)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{crs}}{target coordinate reference system passed to \code{st_transform}}
+
+\item{\code{scale_factor}}{A scale factor to multiply existing geometry by.}
+}
+\if{html}{\out{</div>}}
+}
+\subsection{Returns}{
+None, called for effects
 }
 }
 \if{html}{\out{<hr>}}
@@ -906,10 +922,14 @@ Fit an (approximate) log-Gaussian Cox Process model using Maximum Likelihood
   model = "fexp",
   max_iter = 30,
   iter_sampling = 200,
-  tol = 10,
+  tol = ifelse(iter_sampling == 1, 1, 10),
   hist = 5,
   k0 = 10,
   start_theta = NULL,
+  m = c(10, 10),
+  L = 1.2,
+  se = "average",
+  mesh_args = NULL,
   trace = 1
 )}\if{html}{\out{</div>}}
 }
@@ -924,8 +944,8 @@ include. For temporally-varying covariates only the stem is required and not
 the individual column names for each time period (e.g. \code{dayMon} and not \code{dayMon1},
 \code{dayMon2}, etc.) For regional models, covariates should be mapped to the grid currently (see add_covariates)}
 
-\item{\code{model}}{Either "fexp", "sqexp", "matern1", or "matern2" for exponential, squared exponential, and matern with shape of 1 or 2, respectively. Other functions
-from glmmrBase will work, but may be less relevant to spatial models.}
+\item{\code{model}}{Either "fexp", "sqexp", "matern1", or "matern2" for exponential, squared exponential, and matern with shape of 1 or 2, respectively. Add \code{hsgp_} or \code{spde_} for hsgp or
+spde approximation, respectively. For example \code{spde_matern1} or \code{hsgp_fexp}. SPDE is not yet available for spatio-temporal models.}
 
 \item{\code{max_iter}}{Integer. Maximum number of iterations.}
 
@@ -940,6 +960,14 @@ from glmmrBase will work, but may be less relevant to spatial models.}
 \item{\code{start_theta}}{Optional. Starting values for the covariance parameters (log(tau sq), log(lambda), rho), with rho only
 required if more than one time period.}
 
+\item{\code{m}}{Number of basis functions per dimension for HSGP approximation. If spatio-temporal model then three values are required.}
+
+\item{\code{L}}{Multiplicative boundary extension for HSGP approximation.}
+
+\item{\code{se}}{Either "average" for a Monte Carlo averaged standard error, or "point" for standard errors evaluated at the posterior mode of the random effects.}
+
+\item{\code{mesh_args}}{If using spde, then a list with any of \code{max_edge}, \code{cutoff}, and \code{offset} specified, see help for \code{build_spde_data} function, which returns data in the appropriate format.}
+
 \item{\code{trace}}{Integer. Level of detail of information printed to the console. 0 = none, 1 = some (default), 2 = most.}
 }
 \if{html}{\out{</div>}}
@@ -949,29 +977,19 @@ Optionally, an \code{rtsFit} model fit object. This fit is stored internally and
 }
 \subsection{Examples}{
 \if{html}{\out{<div class="r example copy">}}
-\preformatted{# note: these examples are spatial only in 0.10.0 to prevent an error 
-# with the reverse dependency check when updating the base package.
-# If you're seeing this note, then an updated package will be available
-# imminently.
-# a simple example with completely random points
-b1 <- sf::st_sf(sf::st_sfc(sf::st_polygon(list(cbind(c(0,3,3,0,0),c(0,0,3,3,0))))))
-g1 <- grid$new(b1,0.5)
-dp <- data.frame(y=runif(10,0,3),x=runif(10,0,3))
-dp <- create_points(dp,pos_vars = c('y','x'))
-cov1 <- grid$new(b1,0.8)
-cov1$grid_data$cov <- runif(nrow(cov1$grid_data))
-g1$add_covariates(cov1$grid_data,
-                  zcols="cov")
-g1$points_to_grid(dp)
-
-# an example 
-
+\preformatted{# a simple example with simulated points using SPDE approximation
+boundary <- st_set_crs(boundary, 4326)
+g1 <- grid$new(boundary,cellsize=0.01)
+g1$points_to_grid(point_data = create_points(example_points,
+                                             pos_vars = c("Y","X")))
 \donttest{
-g1$lgcp_ml(popdens="cov",iter_sampling = 50)
-g1$model_fit()
-g1$extract_preds("rr")
+msoa <- sf::st_transform(birmingham_crime,crs = 4326)
+g1$add_covariates(msoa,zcols="pop",weight_type="area")
+set.seed(2345)
+fit_spde <- g1$lgcp_ml("pop", model = "hsgp_matern1")
+g1$extract_preds(type = c("rr"), popdens = "pop")
 g1$plot("rr")
-g1$hotspots(threshold = 2, stat = "rr")
+
 
 # this example uses real aggregated spatial data
 # note that the full dataset has 12 time periods
@@ -982,13 +1000,18 @@ g1$hotspots(threshold = 2, stat = "rr")
  example_data$y <- birmingham_crime$t12 # spatial
  example_data <- sf::st_transform(example_data, crs = 4326)
  g2 <- grid$new(example_data,cellsize=0.006)
- g2$lgcp_ml(popdens = "pop", start_theta = log(c(0.1, 0.05)))
- g2$model_fit()
+ set.seed(123)
+ g2$lgcp_ml(popdens = "pop", model = "hsgp_matern1", L = 1.5, m = c(15,15))
  g2$extract_preds("rr")
  g2$plot("rr")
- g2$hotspots(threshold = 2, stat = "rr") 
+ 
+ #SPDE verison rescale to more stable coordinates
+g2$transform(scale_factor = 50)
+set.seed(101)
+fitt <- suppressWarnings(g2$lgcp_ml("pop", model = "spde_matern1")) # use default mesh args
+g2$extract_preds("rr")
+g2$plot("rr")
 }
-
 }
 \if{html}{\out{</div>}}
 
@@ -1008,7 +1031,8 @@ Extract incidence and relative risk predictions. The predictions will be extract
   type = c("pred", "rr", "irr"),
   irr.lag = NULL,
   t.lag = 0,
-  popdens = NULL
+  popdens = NULL,
+  level = 0.95
 )}\if{html}{\out{</div>}}
 }
 
@@ -1026,6 +1050,8 @@ periods lag previous the ratio is in comparison to}
 
 \item{\code{popdens}}{character string. Name of the column in \code{grid_data} with the
 population density data}
+
+\item{\code{level}}{Scalar. The function returns the \code{level}\% prediction interval.}
 }
 \if{html}{\out{</div>}}
 }
@@ -1186,6 +1212,37 @@ g1$scale_conversion_factor()
 
 }
 
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-grid-build_spde_data"></a>}}
+\if{latex}{\out{\hypertarget{method-grid-build_spde_data}{}}}
+\subsection{Method \code{build_spde_data()}}{
+Builds the mesh and relevant matrices for SPDE estimation
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{grid$build_spde_data(
+  max_edge = NULL,
+  cutoff = NULL,
+  offset = NULL,
+  integrate = TRUE
+)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{max_edge}}{The largest allowed triangle edge length. One or two values.}
+
+\item{\code{cutoff}}{The minimum allowed distance between points. Point at most as far apart as this are replaced by a single vertex prior to the mesh refinement step.}
+
+\item{\code{offset}}{The automatic extension distance. One or two values, for an inner and an optional outer extension. If negative, interpreted as a factor relative to the approximate data diameter}
+
+\item{\code{integrate}}{Logical. If TRUE uses fm_int to generate quadrature weights, otherwise uses node to region mapping.}
+}
+\if{html}{\out{</div>}}
+}
+\subsection{Returns}{
+A list with A, C, G, and W matrices.
+}
 }
 \if{html}{\out{<hr>}}
 \if{html}{\out{<a id="method-grid-get_region_data"></a>}}

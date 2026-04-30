@@ -9,6 +9,22 @@ regionModel_ar__new <- function(formula_, data_, colnames_, X_, y_, niter_, T_) 
     .Call(`_rts2_regionModel_ar__new`, formula_, data_, colnames_, X_, y_, niter_, T_)
 }
 
+regionModel_hsgp__new <- function(formula_, data_, colnames_, X_, y_, niter_, m_, L_boundary_) {
+    .Call(`_rts2_regionModel_hsgp__new`, formula_, data_, colnames_, X_, y_, niter_, m_, L_boundary_)
+}
+
+regionModel_spde__new <- function(formula_, data_, colnames_, X_, y_, niter_, A_loc_, C_diag_, G_, alpha_ = 2L) {
+    .Call(`_rts2_regionModel_spde__new`, formula_, data_, colnames_, X_, y_, niter_, A_loc_, C_diag_, G_, alpha_)
+}
+
+regionModel__zu_variance_full <- function(xp, type) {
+    .Call(`_rts2_regionModel__zu_variance_full`, xp, type)
+}
+
+regionModel_spde__zu_variance_full <- function(xp, A_pred_, X_pred_) {
+    .Call(`_rts2_regionModel_spde__zu_variance_full`, xp, A_pred_, X_pred_)
+}
+
 regionModel__set_weights <- function(xp, i, p, x, nrow, ncol, type = 0L) {
     invisible(.Call(`_rts2_regionModel__set_weights`, xp, i, p, x, nrow, ncol, type))
 }
@@ -25,16 +41,16 @@ regionModel__fit <- function(xp, tol, max_iter, hist, k0, type = 0L) {
     invisible(.Call(`_rts2_regionModel__fit`, xp, tol, max_iter, hist, k0, type))
 }
 
-regionModel__information_matrix <- function(xp, type = 0L) {
-    .Call(`_rts2_regionModel__information_matrix`, xp, type)
+regionModel__information_matrix <- function(xp, mc = TRUE, type = 0L) {
+    .Call(`_rts2_regionModel__information_matrix`, xp, mc, type)
 }
 
 regionModel__information_matrix_theta <- function(xp, type = 0L) {
     .Call(`_rts2_regionModel__information_matrix_theta`, xp, type)
 }
 
-regionModel__u <- function(xp, type = 0L) {
-    .Call(`_rts2_regionModel__u`, xp, type)
+regionModel__u <- function(xp, scaled = TRUE, type = 0L) {
+    .Call(`_rts2_regionModel__u`, xp, scaled, type)
 }
 
 regionModel__get_beta <- function(xp, type = 0L) {
